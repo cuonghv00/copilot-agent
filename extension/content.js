@@ -229,10 +229,44 @@ function findDownloadLink() {
     return null;
 }
 
+// --- DOM Explorer ---
+
+function exploreDOM() {
+    try {
+        const inputs = document.querySelectorAll('textarea, [contenteditable="true"]');
+        const inputData = Array.from(inputs).map(el => ({
+            tag: el.tagName,
+            id: el.id,
+            cls: el.className,
+            aria: el.getAttribute('aria-label') || '',
+            ph: el.getAttribute('placeholder') || ''
+        }));
+
+        const buttons = document.querySelectorAll('button');
+        const btnData = Array.from(buttons).map(el => ({
+            aria: el.getAttribute('aria-label') || '',
+            title: el.getAttribute('title') || '',
+            cls: el.className
+        })).filter(b => 
+            b.aria.toLowerCase().includes('send') || 
+            b.aria.toLowerCase().includes('submit') || 
+            b.title.toLowerCase().includes('send') || 
+            b.title.toLowerCase().includes('submit')
+        );
+
+        sendStatus('DOM_EXPLORER', JSON.stringify({ inputs: inputData, buttons: btnData }, null, 2));
+    } catch (e) {
+        sendStatus('DOM_EXPLORER_ERROR', e.message);
+    }
+}
+
 // --- Main Task Executor ---
 
 async function executeTask(taskData) {
     const { model, prompt, system_instruction, onedrive_link } = taskData;
+
+    // Explore the DOM and send it back to Python CLI for debugging
+    exploreDOM();
 
     // Build full prompt
     const fullPrompt = [
