@@ -2,6 +2,7 @@
 // Responsibilities: Model Selection → Prompt Input → Send → Observe Response → Find Download
 
 const SELECTORS = {
+    newChatButton: 'a[aria-label="New chat"], button[aria-label="New chat"]',
     modelSelector: '#gptModeSwitcher, button[aria-label="Model Selector"]',
     chatInput: '#m365-chat-editor-target-element',
     sendButton: 'button[aria-label="Send"], button.fai-SendButton',
@@ -35,6 +36,20 @@ function sendError(message, step) {
     chrome.runtime.sendMessage({ type: 'ERROR', message, step });
 }
 
+// --- Step 0: New Chat ---
+
+async function clickNewChat() {
+    sendStatus('NEW_CHAT', 'Looking for New Chat button...');
+    const btn = await waitForElement(SELECTORS.newChatButton, 5000);
+    if (btn) {
+        btn.click();
+        sendStatus('NEW_CHAT_CLICKED', 'Clicked New Chat button');
+        await sleep(1000);
+    } else {
+        sendStatus('NEW_CHAT_SKIPPED', 'New Chat button not found, continuing...');
+    }
+}
+
 // --- Step 1: Select Model ---
 
 async function selectModel(modelName) {
@@ -50,7 +65,7 @@ async function selectModel(modelName) {
 
     // Find the menu item matching the model name
     const menuItems = Array.from(document.querySelectorAll(
-        '[role="menuitem"], [role="option"], [role="menuitemradio"]'
+        '.fai-CapabilityPickerMenuItem, [role="menuitem"], [role="option"]'
     ));
     const target = menuItems.find(item =>
         item.textContent.toLowerCase().includes(modelName.toLowerCase())
@@ -213,6 +228,12 @@ function findDownloadLink() {
         if (a.href) return a.href;
     }
 
+    // Strategy 2.5: Look for links starting with "Download " in aria-label
+    const downloadAria = document.querySelectorAll('a[aria-label^="Download " i], a[aria-label^="download " i]');
+    for (const a of downloadAria) {
+        if (a.href) return a.href;
+    }
+
     // Strategy 3: Look for buttons with download-related text
     const buttons = Array.from(document.querySelectorAll('button'));
     const downloadBtn = buttons.find(b => {
@@ -278,6 +299,9 @@ async function executeTask(taskData) {
         '',
         'QUY ĐỊNH KẾT QUẢ: Sau khi hoàn thành, hãy tạo file nén (.zip) chứa toàn bộ các file đã được chỉnh sửa và cung cấp link/nút TẢI VỀ cho file này.'
     ].join('\n');
+
+    // Step 0: Click New Chat to ensure a fresh session
+    await clickNewChat();
 
     // Step 1: Select model
     if (model) {
