@@ -65,3 +65,53 @@ def test_zip_repo_excludes_dirs():
             assert "app.py" in names
             assert not any(".git" in n for n in names)
             assert not any("__pycache__" in n for n in names)
+
+def test_extract_zip():
+    """extract_zip extracts files into target directory."""
+    from agent import extract_zip
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Create a zip to extract
+        zip_path = Path(tmpdir) / "output.zip"
+        with zipfile.ZipFile(zip_path, 'w') as zf:
+            zf.writestr("fixed_file.py", "print('fixed')")
+            zf.writestr("src/module.py", "# fixed module")
+
+        target = Path(tmpdir) / "repo"
+        target.mkdir()
+
+        result = extract_zip(zip_path, target)
+        assert result is True
+        assert (target / "fixed_file.py").read_text() == "print('fixed')"
+        assert (target / "src" / "module.py").read_text() == "# fixed module"
+
+
+def test_extract_zip_cleans_up():
+    """extract_zip deletes the zip file after extraction."""
+    from agent import extract_zip
+    with tempfile.TemporaryDirectory() as tmpdir:
+        zip_path = Path(tmpdir) / "output.zip"
+        with zipfile.ZipFile(zip_path, 'w') as zf:
+            zf.writestr("file.py", "content")
+
+        target = Path(tmpdir) / "repo"
+        target.mkdir()
+
+        extract_zip(zip_path, target)
+        assert not zip_path.exists()
+
+
+def test_run_verify_success():
+    """run_verify returns (True, output) when command succeeds."""
+    from agent import run_verify
+    with tempfile.TemporaryDirectory() as tmpdir:
+        success, output = run_verify("echo 'hello world'", Path(tmpdir))
+        assert success is True
+        assert "hello world" in output
+
+
+def test_run_verify_failure():
+    """run_verify returns (False, output) when command fails."""
+    from agent import run_verify
+    with tempfile.TemporaryDirectory() as tmpdir:
+        success, output = run_verify("exit 1", Path(tmpdir))
+        assert success is False
