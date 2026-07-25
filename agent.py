@@ -14,25 +14,18 @@ def load_config():
         return json.load(f)
 
 
-def zip_repo(repo_path: Path, output_zip: Path, exclude_dirs: list[str]) -> Path:
-    """Zip all files in repo_path into output_zip, excluding specified directories.
+def zip_repo(repo_path: Path, output_zip: Path) -> Path:
+    """Zip the repository using git archive for speed and respecting .gitignore.
 
     Args:
         repo_path: Path to the repository directory to zip.
         output_zip: Path where the zip file will be created.
-        exclude_dirs: List of directory names to skip (e.g., ['.git', '__pycache__']).
 
     Returns:
         Path to the created zip file.
     """
     output_zip.parent.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(output_zip, 'w', zipfile.ZIP_DEFLATED) as zipf:
-        for root, dirs, files in os.walk(repo_path):
-            dirs[:] = [d for d in dirs if d not in exclude_dirs]
-            for file in files:
-                file_path = Path(root) / file
-                arcname = file_path.relative_to(repo_path)
-                zipf.write(file_path, arcname)
+    subprocess.run(f"git archive --format=zip HEAD -o {output_zip}", shell=True, cwd=repo_path)
     return output_zip
 
 
@@ -82,73 +75,96 @@ async def handle_task(websocket, config):
     sync_path = Path(config["sync_path"]).expanduser().resolve()
     download_path = Path(config["download_path"]).expanduser().resolve()
 
-    # Step 1: Zip the repo
-    print("[CLI] Zipping repository...")
+    # Step 1: Zip the repo initially for the session
+    print("[CLI] Initializing session... Zipping repository using git archive...")
     zip_output = sync_path / "workspace.zip"
-    await asyncio.to_thread(zip_repo, repo_path, zip_output, config["zip_exclude_dirs"])
+    await asyncio.to_thread(zip_repo, repo_path, zip_output)
     print(f"[CLI] Repo zipped to {zip_output}")
 
-    # Step 2: Wait for user prompt input
-    prompt = await asyncio.to_thread(input, "[CLI] Enter task prompt (or press Enter for default): ")
-    prompt = prompt.strip()
-    if not prompt:
-        prompt = "Review the codebase and fix any bugs you find."
+    while True:
+        # Step 2: Wait for user prompt input
+        prompt = await asyncio.to_thread(input, "[CLI] Enter task prompt (or type /zip to re-zip, /exit to quit): ")
+        prompt = prompt.strip()
+        
+        if prompt.lower() == "/exit":
+            print("[CLI] Exiting session.")
+            break
+        elif prompt.lower() == "/zip":
+            print("[CLI] Re-zipping repository using git archive...")
+            await asyncio.to_thread(zip_repo, repo_path, zip_output)
+            print(f"[CLI] Repo re-zipped to {zip_output}")
+            continue
 
-    model = await asyncio.to_thread(input, f"[CLI] Enter model name (default: {config['default_model']}): ")
-    model = model.strip()
-    if not model:
-        model = config["default_model"]
+        if not prompt:
+            prompt = "Review the codebase and fix any bugs you find."
 
-    # Step 3: Send START_TASK to Extension
-    payload = {
-        "action": "START_TASK",
-        "onedrive_link": config["onedrive_link"],
-        "model": model,
-        "prompt": prompt,
-        "system_instruction": (
-            "Bạn là AI Software Engineer. Hãy đọc file mã nguồn tại link OneDrive sau, "
-            "thực hiện yêu cầu, và xuất kết quả ra file zip tên output.zip kèm nút Download."
-        ),
-    }
-    try:
-        await websocket.send(json.dumps(payload))
-        print("[CLI] Task sent to Extension. Waiting for Copilot to process...")
-    except websockets.exceptions.ConnectionClosed:
-        print("[CLI] WebSocket connection closed before task could be sent.")
-        return
+        model = await asyncio.to_thread(input, f"[CLI] Enter model name (default: {config['default_model']}): ")
+        model = model.strip()
+        if not model:
+            model = config["default_model"]
 
-    # Step 4: Listen for status updates and completion
-    async for message in websocket:
-        data = json.loads(message)
-        event = data.get("event", "")
-        status = data.get("status", "")
+        # Step 3: Send START_TASK to Extension
+        payload = {
+            "action": "START_TASK",
+            "onedrive_link": config["onedrive_link"],
+            "model": model,
+            "prompt": prompt,
+            "system_instruction": (
+                "Bạn là AI Software Engineer. Hãy đọc file mã nguồn tại link OneDrive sau, "
+                "thực hiện yêu cầu, và xuất kết quả ra file zip tên output.zip kèm nút Download."
+            ),
+        }
+        try:
+            await websocket.send(json.dumps(payload))
+            print("[CLI] Task sent to Extension. Waiting for Copilot to process...")
+        except websockets.exceptions.ConnectionClosed:
+            print("[CLI] WebSocket connection closed before task could be sent.")
+            return
 
-        if event == "STATUS_UPDATE":
-            print(f"[CLI] Status: {status} — {data.get('message', '')}")
+        # Step 4: Listen for status updates and completion for this task
+        while True:
+            try:
+                message = await websocket.recv()
+            except websockets.exceptions.ConnectionClosed:
+                print("[CLI] WebSocket disconnected during task execution.")
+                return
 
-        elif event == "TASK_COMPLETE" and status == "FILE_DOWNLOADED":
-            filename = data.get("filename", "output.zip")
-            print(f"[CLI] File downloaded: {filename}. Applying changes...")
+            data = json.loads(message)
+            event = data.get("event", "")
+            status = data.get("status", "")
 
-            zip_file = download_path / filename
-            if extract_zip(zip_file, repo_path):
-                print("[CLI] Changes applied to repo.")
-                success, output = run_verify(config["verify_command"], repo_path)
-                if success:
-                    print("[CLI] ✅ Verification PASSED!")
-                    # Show git diff
-                    _, diff = run_verify("git diff", repo_path)
-                    if diff.strip():
-                        print(f"[CLI] Changes:\n{diff}")
+            if event == "STATUS_UPDATE":
+                print(f"[CLI] Status: {status} — {data.get('message', '')}")
+
+            elif event == "TASK_COMPLETE" and status == "FILE_DOWNLOADED":
+                filepath = data.get("filepath", "")
+                if filepath and Path(filepath).exists():
+                    zip_file = Path(filepath)
                 else:
-                    print(f"[CLI] ❌ Verification FAILED:\n{output}")
-            else:
-                print("[CLI] ❌ Failed to extract downloaded file.")
-            break
+                    filename = data.get("filename", "output.zip")
+                    zip_file = download_path / filename
 
-        elif event == "ERROR":
-            print(f"[CLI] ❌ Error at step '{data.get('step', '?')}': {data.get('message', '')}")
-            break
+                print(f"[CLI] File downloaded: {zip_file}. Applying changes...")
+
+                if extract_zip(zip_file, repo_path):
+                    print("[CLI] Changes applied to repo.")
+                    success, output = run_verify(config["verify_command"], repo_path)
+                    if success:
+                        print("[CLI] ✅ Verification PASSED!")
+                        # Show git diff
+                        _, diff = run_verify("git diff", repo_path)
+                        if diff.strip():
+                            print(f"[CLI] Changes:\n{diff}")
+                    else:
+                        print(f"[CLI] ❌ Verification FAILED:\n{output}")
+                else:
+                    print("[CLI] ❌ Failed to extract downloaded file.")
+                
+                break # Task finished, go back to ask for next prompt
+
+            elif event == "ERROR":
+                print(f"[CLI] ❌ Error at step '{data.get('step', '?')}': {data.get('message', '')}")
+                break # Task finished with error, go back to ask for next prompt
 
 async def safe_handle_task(websocket, config):
     try:

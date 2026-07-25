@@ -140,7 +140,8 @@ chrome.downloads.onChanged.addListener((delta) => {
                     sendToServer({
                         event: 'TASK_COMPLETE',
                         status: 'FILE_DOWNLOADED',
-                        filename: filename
+                        filename: filename,
+                        filepath: filepath
                     });
                     activeDownloadId = null;
                 }
