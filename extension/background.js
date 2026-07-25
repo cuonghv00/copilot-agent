@@ -65,7 +65,18 @@ async function handleStartTask(taskData) {
             chrome.tabs.onUpdated.removeListener(listener);
 
             // Small delay to let Copilot UI fully render
-            setTimeout(() => {
+            setTimeout(async () => {
+                // Ensure content script is injected even if tab wasn't manually refreshed
+                try {
+                    await chrome.scripting.executeScript({
+                        target: { tabId: copilotTabId },
+                        files: ['content.js']
+                    });
+                    console.log('[CopilotAgent BG] Injected content.js successfully');
+                } catch (e) {
+                    console.log('[CopilotAgent BG] Script injection error (maybe already injected):', e.message);
+                }
+
                 sendToServer({ event: 'STATUS_UPDATE', status: 'PAGE_READY', message: 'Copilot page loaded' });
                 chrome.tabs.sendMessage(copilotTabId, {
                     type: 'EXECUTE_TASK',

@@ -7,7 +7,8 @@
     "downloads",
     "storage",
     "activeTab",
-    "tabs"
+    "tabs",
+    "scripting"
   ],
   "host_permissions": [
     "https://m365.cloud.microsoft/*",
