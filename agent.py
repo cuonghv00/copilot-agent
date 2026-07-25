@@ -85,15 +85,17 @@ async def handle_task(websocket, config):
     # Step 1: Zip the repo
     print("[CLI] Zipping repository...")
     zip_output = sync_path / "workspace.zip"
-    zip_repo(repo_path, zip_output, config["zip_exclude_dirs"])
+    await asyncio.to_thread(zip_repo, repo_path, zip_output, config["zip_exclude_dirs"])
     print(f"[CLI] Repo zipped to {zip_output}")
 
     # Step 2: Wait for user prompt input
-    prompt = input("[CLI] Enter task prompt (or press Enter for default): ").strip()
+    prompt = await asyncio.to_thread(input, "[CLI] Enter task prompt (or press Enter for default): ")
+    prompt = prompt.strip()
     if not prompt:
         prompt = "Review the codebase and fix any bugs you find."
 
-    model = input(f"[CLI] Enter model name (default: {config['default_model']}): ").strip()
+    model = await asyncio.to_thread(input, f"[CLI] Enter model name (default: {config['default_model']}): ")
+    model = model.strip()
     if not model:
         model = config["default_model"]
 
@@ -156,7 +158,7 @@ async def main():
     print("[CLI] Waiting for Chrome Extension to connect...")
 
     async with websockets.serve(
-        lambda ws: handle_task(ws, config), "localhost", port
+        lambda ws: handle_task(ws, config), "0.0.0.0", port
     ):
         await asyncio.Future()  # Run forever
 
