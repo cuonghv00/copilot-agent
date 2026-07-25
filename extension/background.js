@@ -67,6 +67,8 @@ async function handleStartTask(taskData) {
 
 // --- Messages from Content Script ---
 
+let activeDownloadId = null;
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     console.log('[CopilotAgent BG] Message from content script:', message);
 
@@ -100,6 +102,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                         step: 'DOWNLOAD'
                     });
                 } else {
+                    activeDownloadId = downloadId;
                     console.log(`[CopilotAgent BG] Download started: ${downloadId}`);
                 }
             });
@@ -126,27 +129,33 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 // --- Download Completion Listener ---
 
 chrome.downloads.onChanged.addListener((delta) => {
-    if (delta.state && delta.state.current === 'complete') {
-        chrome.downloads.search({ id: delta.id }, (results) => {
-            if (results.length > 0 && results[0].filename.includes('CopilotAgent')) {
-                const filename = results[0].filename.split('/').pop();
-                console.log(`[CopilotAgent BG] Download complete: ${filename}`);
-                sendToServer({
-                    event: 'TASK_COMPLETE',
-                    status: 'FILE_DOWNLOADED',
-                    filename: filename
-                });
-            }
-        });
-    }
+    if (delta.id === activeDownloadId) {
+        if (delta.state && delta.state.current === 'complete') {
+            chrome.downloads.search({ id: delta.id }, (results) => {
+                if (results.length > 0) {
+                    const filepath = results[0].filename;
+                    // Extract just the basename, handling both / and \
+                    const filename = filepath.split('/').pop().split('\\').pop();
+                    console.log(`[CopilotAgent BG] Download complete: ${filename}`);
+                    sendToServer({
+                        event: 'TASK_COMPLETE',
+                        status: 'FILE_DOWNLOADED',
+                        filename: filename
+                    });
+                    activeDownloadId = null;
+                }
+            });
+        }
 
-    if (delta.state && delta.state.current === 'interrupted') {
-        sendToServer({
-            event: 'ERROR',
-            status: 'ERROR',
-            message: `Download interrupted: ${delta.error?.current || 'unknown'}`,
-            step: 'DOWNLOAD'
-        });
+        if (delta.state && delta.state.current === 'interrupted') {
+            sendToServer({
+                event: 'ERROR',
+                status: 'ERROR',
+                message: `Download interrupted: ${delta.error?.current || 'unknown'}`,
+                step: 'DOWNLOAD'
+            });
+            activeDownloadId = null;
+        }
     }
 });
 

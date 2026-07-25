@@ -50,7 +50,15 @@ async function clickNewChat() {
     }
 }
 
-// --- Step 1: Select Model ---
+const MODEL_MAPPING = {
+    'auto': ['Auto'],
+    'quick': ['Quick response'],
+    'think': ['Think deeper'],
+    'sonnet': ['Claude', 'Sonnet'],
+    'opus': ['Claude', 'Opus'],
+    'gpt5.5': ['GPT', '5.5'],
+    'gpt5.6': ['GPT', '5.6']
+};
 
 async function selectModel(modelName) {
     sendStatus('MODEL_SELECTION', `Looking for model selector for ${modelName}...`);
@@ -68,29 +76,30 @@ async function selectModel(modelName) {
         return items.find(item => item.textContent.toLowerCase().includes(name.toLowerCase()));
     };
 
-    let target = findMenuItem(modelName);
+    const path = MODEL_MAPPING[modelName.toLowerCase()] || [modelName];
+    let target = null;
 
-    // If not found directly, maybe it's under Claude?
-    if (!target && (modelName.toLowerCase().includes('sonnet') || modelName.toLowerCase().includes('opus'))) {
-        const claude = findMenuItem('claude');
-        if (claude) {
-            claude.click();
+    for (let i = 0; i < path.length; i++) {
+        const step = path[i];
+        target = findMenuItem(step);
+        
+        if (target) {
+            target.click();
             await sleep(1000);
-            target = findMenuItem(modelName);
+        } else {
+            break;
         }
     }
 
     if (target) {
-        target.click();
         sendStatus('MODEL_SELECTED', `Selected model: ${modelName}`);
         await sleep(500);
         return true;
     } else {
-        // Close the menu by clicking elsewhere
         modelBtn.click();
         sendStatus('MODEL_SKIPPED', `Model "${modelName}" not found in menu, continuing with current`);
         await sleep(500);
-        return true;  // Continue with default model
+        return true;
     }
 }
 
@@ -259,44 +268,10 @@ function findDownloadLink() {
     return null;
 }
 
-// --- DOM Explorer ---
-
-function exploreDOM() {
-    try {
-        const inputs = document.querySelectorAll('textarea, [contenteditable="true"]');
-        const inputData = Array.from(inputs).map(el => ({
-            tag: el.tagName,
-            id: el.id,
-            cls: el.className,
-            aria: el.getAttribute('aria-label') || '',
-            ph: el.getAttribute('placeholder') || ''
-        }));
-
-        const buttons = document.querySelectorAll('button');
-        const btnData = Array.from(buttons).map(el => ({
-            aria: el.getAttribute('aria-label') || '',
-            title: el.getAttribute('title') || '',
-            cls: el.className
-        })).filter(b => 
-            b.aria.toLowerCase().includes('send') || 
-            b.aria.toLowerCase().includes('submit') || 
-            b.title.toLowerCase().includes('send') || 
-            b.title.toLowerCase().includes('submit')
-        );
-
-        sendStatus('DOM_EXPLORER', JSON.stringify({ inputs: inputData, buttons: btnData }, null, 2));
-    } catch (e) {
-        sendStatus('DOM_EXPLORER_ERROR', e.message);
-    }
-}
-
 // --- Main Task Executor ---
 
 async function executeTask(taskData) {
     const { model, prompt, system_instruction, onedrive_link } = taskData;
-
-    // Explore the DOM and send it back to Python CLI for debugging
-    exploreDOM();
 
     // Build full prompt
     const fullPrompt = [

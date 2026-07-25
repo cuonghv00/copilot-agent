@@ -5,7 +5,7 @@
   "onedrive_link": "https://example.com/workspace.zip",
   "copilot_base_url": "https://m365.cloud.microsoft/chat",
   "websocket_port": 8765,
-  "default_model": "Think",
+  "default_model": "auto",
   "verify_command": "python3 -m unittest discover",
   "max_retry_on_failure": 3,
   "zip_exclude_dirs": [".git", "__pycache__", "node_modules", ".venv"]
