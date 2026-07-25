@@ -311,14 +311,22 @@ async function executeTask(taskData) {
     }
 }
 
-// --- Message Listener ---
-
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message.type === 'EXECUTE_TASK') {
-        console.log('[CopilotAgent CS] Received task:', message);
-        sendStatus('TASK_RECEIVED', 'Content script started executing task...');
-        executeTask(message);
-    }
-});
+// --- Initialization & Task Pulling ---
 
 console.log('[CopilotAgent CS] Content script loaded on', window.location.href);
+
+// Wait a bit for the SPA to render, then ask background script if there is a pending task
+setTimeout(() => {
+    chrome.runtime.sendMessage({ type: 'PAGE_READY_PULL_TASK' }, (response) => {
+        if (chrome.runtime.lastError) {
+            console.error('[CopilotAgent CS] Error pulling task:', chrome.runtime.lastError.message);
+            return;
+        }
+
+        if (response && response.hasTask) {
+            console.log('[CopilotAgent CS] Pulled task:', response.taskData);
+            sendStatus('TASK_RECEIVED', 'Content script pulled task and is executing...');
+            executeTask(response.taskData);
+        }
+    });
+}, 3000);

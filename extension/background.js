@@ -45,8 +45,10 @@ function sendToServer(payload) {
 
 // --- Task Handling ---
 
+let pendingTask = null;
+
 async function handleStartTask(taskData) {
-    // Step 1: Find or create Copilot tab
+    pendingTask = taskData;
     sendToServer({ event: 'STATUS_UPDATE', status: 'NAVIGATING_NEW_CHAT', message: 'Navigating to new chat...' });
 
     const tabs = await chrome.tabs.query({ url: ['https://m365.cloud.microsoft/*', 'https://copilot.microsoft.com/*'] });
@@ -54,53 +56,30 @@ async function handleStartTask(taskData) {
     if (tabs.length > 0) {
         copilotTabId = tabs[0].id;
         await chrome.tabs.update(copilotTabId, { url: COPILOT_BASE_URL, active: true });
+        // Optional: reload to ensure content script runs fresh if SPA doesn't trigger it
+        await chrome.tabs.reload(copilotTabId);
     } else {
         const tab = await chrome.tabs.create({ url: COPILOT_BASE_URL, active: true });
         copilotTabId = tab.id;
     }
-
-    // Step 2: Wait for page to load, then send task to content script
-    chrome.tabs.onUpdated.addListener(function listener(tabId, changeInfo) {
-        if (tabId === copilotTabId && changeInfo.status === 'complete') {
-            chrome.tabs.onUpdated.removeListener(listener);
-
-            // Small delay to let Copilot UI fully render
-            setTimeout(async () => {
-                // Ensure content script is injected even if tab wasn't manually refreshed
-                try {
-                    await chrome.scripting.executeScript({
-                        target: { tabId: copilotTabId },
-                        files: ['content.js']
-                    });
-                    console.log('[CopilotAgent BG] Injected content.js successfully');
-                } catch (e) {
-                    console.log('[CopilotAgent BG] Script injection error (maybe already injected):', e.message);
-                }
-
-                sendToServer({ event: 'STATUS_UPDATE', status: 'PAGE_READY', message: 'Copilot page loaded' });
-                chrome.tabs.sendMessage(copilotTabId, {
-                    type: 'EXECUTE_TASK',
-                    ...taskData
-                }, (response) => {
-                    if (chrome.runtime.lastError) {
-                        console.error('[CopilotAgent BG] sendMessage error:', chrome.runtime.lastError.message);
-                        sendToServer({ 
-                            event: 'ERROR', 
-                            status: 'ERROR', 
-                            message: 'Không tìm thấy Content Script. Hãy thử Refresh (F5) tab Copilot trên trình duyệt rồi thử lại!', 
-                            step: 'INJECTION' 
-                        });
-                    }
-                });
-            }, 3000);
-        }
-    });
+    // We now rely on the content script to pull the task when it loads.
 }
 
 // --- Messages from Content Script ---
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     console.log('[CopilotAgent BG] Message from content script:', message);
+
+    if (message.type === 'PAGE_READY_PULL_TASK') {
+        if (pendingTask) {
+            sendResponse({ hasTask: true, taskData: pendingTask });
+            pendingTask = null; // consume it
+            sendToServer({ event: 'STATUS_UPDATE', status: 'PAGE_READY', message: 'Copilot page loaded and task pulled' });
+        } else {
+            sendResponse({ hasTask: false });
+        }
+        return true;
+    }
 
     if (message.type === 'DOWNLOAD_FILE') {
         // Content script found a download URL
