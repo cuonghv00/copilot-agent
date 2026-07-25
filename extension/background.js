@@ -86,22 +86,32 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const downloadUrl = message.url;
         const filename = message.filename || 'CopilotAgent/output.zip';
 
-        chrome.downloads.download({
-            url: downloadUrl,
-            filename: filename,
-            conflictAction: 'overwrite'
-        }, (downloadId) => {
-            if (chrome.runtime.lastError) {
-                sendToServer({
-                    event: 'ERROR',
-                    status: 'ERROR',
-                    message: `Download failed: ${chrome.runtime.lastError.message}`,
-                    step: 'DOWNLOAD'
-                });
-            } else {
-                console.log(`[CopilotAgent BG] Download started: ${downloadId}`);
-            }
-        });
+        try {
+            chrome.downloads.download({
+                url: downloadUrl,
+                filename: filename,
+                conflictAction: 'overwrite'
+            }, (downloadId) => {
+                if (chrome.runtime.lastError) {
+                    sendToServer({
+                        event: 'ERROR',
+                        status: 'ERROR',
+                        message: `Download failed: ${chrome.runtime.lastError.message}`,
+                        step: 'DOWNLOAD'
+                    });
+                } else {
+                    console.log(`[CopilotAgent BG] Download started: ${downloadId}`);
+                }
+            });
+        } catch (e) {
+            console.error('[CopilotAgent BG] Synchronous download error:', e);
+            sendToServer({
+                event: 'ERROR',
+                status: 'ERROR',
+                message: `Download failed synchronously: ${e.message}`,
+                step: 'DOWNLOAD'
+            });
+        }
     }
 
     if (message.type === 'STATUS_UPDATE') {

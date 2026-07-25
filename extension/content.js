@@ -63,13 +63,22 @@ async function selectModel(modelName) {
     modelBtn.click();
     await sleep(1000);
 
-    // Find the menu item matching the model name
-    const menuItems = Array.from(document.querySelectorAll(
-        '.fai-CapabilityPickerMenuItem, [role="menuitem"], [role="option"]'
-    ));
-    const target = menuItems.find(item =>
-        item.textContent.toLowerCase().includes(modelName.toLowerCase())
-    );
+    const findMenuItem = (name) => {
+        const items = Array.from(document.querySelectorAll('.fai-CapabilityPickerMenuItem, [role="menuitem"], [role="option"]'));
+        return items.find(item => item.textContent.toLowerCase().includes(name.toLowerCase()));
+    };
+
+    let target = findMenuItem(modelName);
+
+    // If not found directly, maybe it's under Claude?
+    if (!target && (modelName.toLowerCase().includes('sonnet') || modelName.toLowerCase().includes('opus'))) {
+        const claude = findMenuItem('claude');
+        if (claude) {
+            claude.click();
+            await sleep(1000);
+            target = findMenuItem(modelName);
+        }
+    }
 
     if (target) {
         target.click();
@@ -330,11 +339,16 @@ async function executeTask(taskData) {
                 const blob = await res.blob();
                 const reader = new FileReader();
                 reader.onloadend = () => {
-                    chrome.runtime.sendMessage({
-                        type: 'DOWNLOAD_FILE',
-                        url: reader.result,
-                        filename: `CopilotAgent/${downloadData.filename}`
-                    });
+                    try {
+                        chrome.runtime.sendMessage({
+                            type: 'DOWNLOAD_FILE',
+                            url: reader.result,
+                            filename: `CopilotAgent/${downloadData.filename}`
+                        });
+                        sendStatus('DOWNLOADING', 'Sent Base64 payload to background script.');
+                    } catch (e) {
+                        sendError(`Failed to send Base64 payload: ${e.message}`, 'DOWNLOAD');
+                    }
                 };
                 reader.readAsDataURL(blob);
             } else {
