@@ -110,8 +110,12 @@ async def handle_task(websocket, config):
             "thực hiện yêu cầu, và xuất kết quả ra file zip tên output.zip kèm nút Download."
         ),
     }
-    await websocket.send(json.dumps(payload))
-    print("[CLI] Task sent to Extension. Waiting for Copilot to process...")
+    try:
+        await websocket.send(json.dumps(payload))
+        print("[CLI] Task sent to Extension. Waiting for Copilot to process...")
+    except websockets.exceptions.ConnectionClosed:
+        print("[CLI] WebSocket connection closed before task could be sent.")
+        return
 
     # Step 4: Listen for status updates and completion
     async for message in websocket:
@@ -146,6 +150,14 @@ async def handle_task(websocket, config):
             print(f"[CLI] ❌ Error at step '{data.get('step', '?')}': {data.get('message', '')}")
             break
 
+async def safe_handle_task(websocket, config):
+    try:
+        await handle_task(websocket, config)
+    except websockets.exceptions.ConnectionClosed:
+        print("[CLI] WebSocket disconnected during task execution.")
+    except Exception as e:
+        print(f"[CLI] Unexpected error in task: {e}")
+
 
 async def main():
     """Start WebSocket server and wait for Extension to connect."""
@@ -158,7 +170,7 @@ async def main():
     print("[CLI] Waiting for Chrome Extension to connect...")
 
     async with websockets.serve(
-        lambda ws: handle_task(ws, config), "0.0.0.0", port
+        lambda ws: safe_handle_task(ws, config), "0.0.0.0", port
     ):
         await asyncio.Future()  # Run forever
 

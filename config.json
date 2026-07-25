@@ -1,7 +1,7 @@
 {
   "repo_path": "./my_project",
   "sync_path": "./my_project_sync",
-  "download_path": "./my_project_downloads",
+  "download_path": "~/Downloads/CopilotAgent",
   "onedrive_link": "https://example.com/workspace.zip",
   "copilot_base_url": "https://m365.cloud.microsoft/chat",
   "websocket_port": 8765,

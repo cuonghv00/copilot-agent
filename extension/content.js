@@ -219,19 +219,19 @@ function findDownloadLink() {
     // Strategy 1: Look for <a> tags with download attribute
     const downloadAnchors = document.querySelectorAll('a[download]');
     for (const a of downloadAnchors) {
-        if (a.href) return a.href;
+        if (a.href) return { url: a.href, filename: a.download || 'output.zip' };
     }
 
     // Strategy 2: Look for links to zip files
     const zipLinks = document.querySelectorAll('a[href*=".zip"]');
     for (const a of zipLinks) {
-        if (a.href) return a.href;
+        if (a.href) return { url: a.href, filename: a.download || 'output.zip' };
     }
 
     // Strategy 2.5: Look for links starting with "Download " in aria-label
     const downloadAria = document.querySelectorAll('a[aria-label^="Download " i], a[aria-label^="download " i]');
     for (const a of downloadAria) {
-        if (a.href) return a.href;
+        if (a.href) return { url: a.href, filename: a.download || 'output.zip' };
     }
 
     // Strategy 3: Look for buttons with download-related text
@@ -244,7 +244,7 @@ function findDownloadLink() {
     if (downloadBtn) {
         // Click the download button and let the browser handle it
         downloadBtn.click();
-        return '__CLICKED_DOWNLOAD_BUTTON__';
+        return { url: '__CLICKED_DOWNLOAD_BUTTON__', filename: 'output.zip' };
     }
 
     return null;
@@ -318,16 +318,36 @@ async function executeTask(taskData) {
     if (!sendOk) return;
 
     // Step 4: Observe response and find download link
-    const downloadUrl = await observeResponse();
+    const downloadData = await observeResponse();
 
-    if (downloadUrl && downloadUrl !== '__CLICKED_DOWNLOAD_BUTTON__') {
-        sendStatus('DOWNLOADING', `Found download URL: ${downloadUrl}`);
-        chrome.runtime.sendMessage({
-            type: 'DOWNLOAD_FILE',
-            url: downloadUrl,
-            filename: 'CopilotAgent/output.zip'
-        });
-    } else if (downloadUrl === '__CLICKED_DOWNLOAD_BUTTON__') {
+    if (downloadData && downloadData.url !== '__CLICKED_DOWNLOAD_BUTTON__') {
+        sendStatus('DOWNLOADING', `Found download URL: ${downloadData.url.substring(0, 50)}...`);
+        
+        try {
+            if (downloadData.url.startsWith('blob:')) {
+                sendStatus('DOWNLOADING', 'Fetching blob to convert to Base64...');
+                const res = await fetch(downloadData.url);
+                const blob = await res.blob();
+                const reader = new FileReader();
+                reader.onloadend = () => {
+                    chrome.runtime.sendMessage({
+                        type: 'DOWNLOAD_FILE',
+                        url: reader.result,
+                        filename: `CopilotAgent/${downloadData.filename}`
+                    });
+                };
+                reader.readAsDataURL(blob);
+            } else {
+                chrome.runtime.sendMessage({
+                    type: 'DOWNLOAD_FILE',
+                    url: downloadData.url,
+                    filename: `CopilotAgent/${downloadData.filename}`
+                });
+            }
+        } catch (e) {
+            sendError(`Failed to fetch blob URL: ${e.message}`, 'DOWNLOAD');
+        }
+    } else if (downloadData && downloadData.url === '__CLICKED_DOWNLOAD_BUTTON__') {
         sendStatus('DOWNLOADING', 'Clicked download button, waiting for browser to handle...');
         // The browser download will be caught by background.js download listener
     } else {
