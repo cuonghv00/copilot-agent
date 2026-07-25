@@ -38,10 +38,11 @@ function sendError(message, step) {
 // --- Step 1: Select Model ---
 
 async function selectModel(modelName) {
-    const modelBtn = await waitForElement(SELECTORS.modelSelector);
+    sendStatus('MODEL_SELECTION', `Looking for model selector for ${modelName}...`);
+    const modelBtn = await waitForElement(SELECTORS.modelSelector, 5000);
     if (!modelBtn) {
-        sendError('Model Selector button not found', 'MODEL_SELECTION');
-        return false;
+        sendStatus('MODEL_SKIPPED', 'Model selector not found, skipping model selection.');
+        return true; // We don't fail, we just skip
     }
 
     modelBtn.click();
@@ -63,7 +64,7 @@ async function selectModel(modelName) {
     } else {
         // Close the menu by clicking elsewhere
         modelBtn.click();
-        sendStatus('MODEL_SELECTED', `Model "${modelName}" not found in menu, using default`);
+        sendStatus('MODEL_SKIPPED', `Model "${modelName}" not found in menu, continuing with current`);
         await sleep(500);
         return true;  // Continue with default model
     }
@@ -72,12 +73,22 @@ async function selectModel(modelName) {
 // --- Step 2: Input Prompt ---
 
 async function inputPrompt(fullPrompt) {
-    const editor = await waitForElement(SELECTORS.chatInput);
+    sendStatus('PROMPT_FINDING', 'Looking for chat input element...');
+    const editor = await waitForElement(SELECTORS.chatInput, 5000);
     if (!editor) {
-        sendError('Chat input element not found', 'PROMPT_INPUT');
-        return false;
+        // Fallback selector for generic textareas if M365 chat editor isn't found
+        const fallbackEditor = await waitForElement('textarea, [contenteditable="true"]', 3000);
+        if (!fallbackEditor) {
+            sendError('Chat input element not found. UI may have changed.', 'PROMPT_INPUT');
+            return false;
+        }
+        sendStatus('PROMPT_FINDING', 'Found fallback chat input element.');
+        return await typeIntoEditor(fallbackEditor, fullPrompt);
     }
+    return await typeIntoEditor(editor, fullPrompt);
+}
 
+async function typeIntoEditor(editor, fullPrompt) {
     editor.focus();
     await sleep(300);
 
@@ -101,11 +112,22 @@ async function inputPrompt(fullPrompt) {
 // --- Step 3: Click Send ---
 
 async function clickSend() {
-    // Wait a moment for the Send button to become active
+    sendStatus('SENDING', 'Looking for Send button...');
     await sleep(500);
-    const sendBtn = await waitForElement(SELECTORS.sendButton);
+    const sendBtn = await waitForElement(SELECTORS.sendButton, 5000);
     if (!sendBtn) {
-        sendError('Send button not found', 'SEND');
+        // Fallback: look for button containing "Submit" or "Send" SVG or aria-label
+        const fallbackBtn = await waitForElement('button[title*="Submit"], button[aria-label*="Submit"], button svg', 3000);
+        if (fallbackBtn) {
+            let target = fallbackBtn.tagName === 'svg' ? fallbackBtn.closest('button') : fallbackBtn;
+            if (target) {
+                target.click();
+                sendStatus('PROMPT_SENT', 'Prompt sent to Copilot via fallback button');
+                return true;
+            }
+        }
+        
+        sendError('Send button not found. UI may have changed.', 'SEND');
         return false;
     }
 
@@ -260,6 +282,7 @@ async function executeTask(taskData) {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.type === 'EXECUTE_TASK') {
         console.log('[CopilotAgent CS] Received task:', message);
+        sendStatus('TASK_RECEIVED', 'Content script started executing task...');
         executeTask(message);
     }
 });
