@@ -70,6 +70,16 @@ async function handleStartTask(taskData) {
                 chrome.tabs.sendMessage(copilotTabId, {
                     type: 'EXECUTE_TASK',
                     ...taskData
+                }, (response) => {
+                    if (chrome.runtime.lastError) {
+                        console.error('[CopilotAgent BG] sendMessage error:', chrome.runtime.lastError.message);
+                        sendToServer({ 
+                            event: 'ERROR', 
+                            status: 'ERROR', 
+                            message: 'Không tìm thấy Content Script. Hãy thử Refresh (F5) tab Copilot trên trình duyệt rồi thử lại!', 
+                            step: 'INJECTION' 
+                        });
+                    }
                 });
             }, 3000);
         }
