@@ -48,21 +48,29 @@ function sendToServer(payload) {
 let pendingTask = null;
 
 async function handleStartTask(taskData) {
+    const isNewSession = taskData.is_new_session;
     pendingTask = taskData;
-    sendToServer({ event: 'STATUS_UPDATE', status: 'NAVIGATING_NEW_CHAT', message: 'Navigating to new chat...' });
 
-    const tabs = await chrome.tabs.query({ url: ['https://m365.cloud.microsoft/*', 'https://copilot.microsoft.com/*'] });
+    if (isNewSession) {
+        sendToServer({ event: 'STATUS_UPDATE', status: 'NAVIGATING_NEW_CHAT', message: 'Navigating to new chat...' });
 
-    if (tabs.length > 0) {
-        copilotTabId = tabs[0].id;
-        await chrome.tabs.update(copilotTabId, { url: COPILOT_BASE_URL, active: true });
-        // Optional: reload to ensure content script runs fresh if SPA doesn't trigger it
-        await chrome.tabs.reload(copilotTabId);
+        const tabs = await chrome.tabs.query({ url: ['https://m365.cloud.microsoft/*', 'https://copilot.microsoft.com/*'] });
+
+        if (tabs.length > 0) {
+            copilotTabId = tabs[0].id;
+            await chrome.tabs.update(copilotTabId, { url: COPILOT_BASE_URL, active: true });
+            // Optional: reload to ensure content script runs fresh if SPA doesn't trigger it
+            await chrome.tabs.reload(copilotTabId);
+        } else {
+            const tab = await chrome.tabs.create({ url: COPILOT_BASE_URL, active: true });
+            copilotTabId = tab.id;
+        }
+        // We now rely on the content script to pull the task when it loads.
     } else {
-        const tab = await chrome.tabs.create({ url: COPILOT_BASE_URL, active: true });
-        copilotTabId = tab.id;
+        // Continuing session, send directly to content script
+        sendToServer({ event: 'STATUS_UPDATE', status: 'CONTINUING_CHAT', message: 'Continuing chat in same session...' });
+        chrome.tabs.sendMessage(copilotTabId, { type: 'EXECUTE_TASK', taskData: taskData });
     }
-    // We now rely on the content script to pull the task when it loads.
 }
 
 // --- Messages from Content Script ---

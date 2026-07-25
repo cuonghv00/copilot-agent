@@ -271,10 +271,10 @@ function findDownloadLink() {
 // --- Main Task Executor ---
 
 async function executeTask(taskData) {
-    const { model, prompt, system_instruction, onedrive_link } = taskData;
+    const { model, prompt, system_instruction, onedrive_link, is_new_session } = taskData;
 
     // Build full prompt
-    const fullPrompt = [
+    const fullPrompt = is_new_session ? [
         system_instruction || '',
         '',
         `Link OneDrive chứa mã nguồn: ${onedrive_link}`,
@@ -282,15 +282,21 @@ async function executeTask(taskData) {
         `YÊU CẦU: ${prompt}`,
         '',
         'QUY ĐỊNH KẾT QUẢ: Sau khi hoàn thành, hãy tạo file nén (.zip) chứa toàn bộ các file đã được chỉnh sửa và cung cấp link/nút TẢI VỀ cho file này.'
+    ].join('\n') : [
+        `YÊU CẦU TIẾP THEO: ${prompt}`,
+        '',
+        'QUY ĐỊNH KẾT QUẢ: Sau khi hoàn thành, hãy cập nhật lại file nén (.zip) chứa toàn bộ mã nguồn và cung cấp link/nút TẢI VỀ cho tôi.'
     ].join('\n');
 
-    // Step 0: Click New Chat to ensure a fresh session
-    await clickNewChat();
+    if (is_new_session) {
+        // Step 0: Click New Chat to ensure a fresh session
+        await clickNewChat();
 
-    // Step 1: Select model
-    if (model) {
-        const modelOk = await selectModel(model);
-        if (!modelOk) return;
+        // Step 1: Select model
+        if (model) {
+            const modelOk = await selectModel(model);
+            if (!modelOk) return;
+        }
     }
 
     // Step 2: Input prompt
@@ -345,6 +351,14 @@ async function executeTask(taskData) {
 }
 
 // --- Initialization & Task Pulling ---
+
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message.type === 'EXECUTE_TASK') {
+        console.log('[CopilotAgent CS] Received task directly:', message.taskData);
+        sendStatus('TASK_RECEIVED', 'Content script received task directly for same session...');
+        executeTask(message.taskData);
+    }
+});
 
 console.log('[CopilotAgent CS] Content script loaded on', window.location.href);
 

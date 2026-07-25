@@ -81,6 +81,12 @@ async def handle_task(websocket, config):
     await asyncio.to_thread(zip_repo, repo_path, zip_output)
     print(f"[CLI] Repo zipped to {zip_output}")
 
+    # Step 1.5: Ask for model once per session
+    model = await asyncio.to_thread(input, f"[CLI] Enter model name (default: {config['default_model']}): ")
+    model = model.strip() or config["default_model"]
+
+    is_new_session = True
+
     while True:
         # Step 2: Wait for user prompt input
         prompt = await asyncio.to_thread(input, "[CLI] Enter task prompt (or type /zip to re-zip, /exit to quit): ")
@@ -95,20 +101,13 @@ async def handle_task(websocket, config):
             print(f"[CLI] Repo re-zipped to {zip_output}")
             continue
 
-        if not prompt:
-            prompt = "Review the codebase and fix any bugs you find."
-
-        model = await asyncio.to_thread(input, f"[CLI] Enter model name (default: {config['default_model']}): ")
-        model = model.strip()
-        if not model:
-            model = config["default_model"]
-
         # Step 3: Send START_TASK to Extension
         payload = {
             "action": "START_TASK",
             "onedrive_link": config["onedrive_link"],
             "model": model,
             "prompt": prompt,
+            "is_new_session": is_new_session,
             "system_instruction": (
                 "Bạn là AI Software Engineer. Hãy đọc file mã nguồn tại link OneDrive sau, "
                 "thực hiện yêu cầu, và xuất kết quả ra file zip tên output.zip kèm nút Download."
@@ -160,6 +159,7 @@ async def handle_task(websocket, config):
                 else:
                     print("[CLI] ❌ Failed to extract downloaded file.")
                 
+                is_new_session = False
                 break # Task finished, go back to ask for next prompt
 
             elif event == "ERROR":
