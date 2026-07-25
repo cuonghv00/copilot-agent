@@ -69,7 +69,12 @@ async function handleStartTask(taskData) {
     } else {
         // Continuing session, send directly to content script
         sendToServer({ event: 'STATUS_UPDATE', status: 'CONTINUING_CHAT', message: 'Continuing chat in same session...' });
-        chrome.tabs.sendMessage(copilotTabId, { type: 'EXECUTE_TASK', taskData: taskData });
+        const tabs = await chrome.tabs.query({ url: ['https://m365.cloud.microsoft/*', 'https://copilot.microsoft.com/*'] });
+        if (tabs.length > 0) {
+            chrome.tabs.sendMessage(tabs[0].id, { type: 'EXECUTE_TASK', taskData: taskData });
+        } else {
+            sendToServer({ event: 'ERROR', status: 'ERROR', message: 'Không tìm thấy tab Copilot đang mở. Vui lòng gõ /new để tạo phiên mới.', step: 'FIND_TAB' });
+        }
     }
 }
 

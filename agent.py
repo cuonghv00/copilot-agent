@@ -80,16 +80,12 @@ async def handle_task(websocket, config):
     zip_output = sync_path / "workspace.zip"
     await asyncio.to_thread(zip_repo, repo_path, zip_output)
     print(f"[CLI] Repo zipped to {zip_output}")
-
-    # Step 1.5: Ask for model once per session
-    model = await asyncio.to_thread(input, f"[CLI] Enter model name (default: {config['default_model']}): ")
-    model = model.strip() or config["default_model"]
-
-    is_new_session = True
+    print("[CLI] Note: By default, tasks will continue the current chat session in the browser.")
+    print("[CLI] To start a NEW chat session and select a model, type: /new")
 
     while True:
         # Step 2: Wait for user prompt input
-        prompt = await asyncio.to_thread(input, "[CLI] Enter task prompt (or type /zip to re-zip, /exit to quit): ")
+        prompt = await asyncio.to_thread(input, "[CLI] Enter task prompt (or /new to clear chat, /zip to re-zip, /exit to quit): ")
         prompt = prompt.strip()
         
         if prompt.lower() == "/exit":
@@ -100,6 +96,22 @@ async def handle_task(websocket, config):
             await asyncio.to_thread(zip_repo, repo_path, zip_output)
             print(f"[CLI] Repo re-zipped to {zip_output}")
             continue
+
+        is_new_session = False
+        model = config["default_model"]
+
+        if prompt.lower().startswith("/new"):
+            is_new_session = True
+            prompt = prompt[4:].strip()
+            print("[CLI] Starting a NEW chat session.")
+            model_input = await asyncio.to_thread(input, f"[CLI] Enter model name (default: {config['default_model']}): ")
+            model = model_input.strip() or config["default_model"]
+            if not prompt:
+                prompt = await asyncio.to_thread(input, "[CLI] Enter task prompt: ")
+                prompt = prompt.strip()
+
+        if not prompt:
+            prompt = "Review the codebase and fix any bugs you find."
 
         # Step 3: Send START_TASK to Extension
         payload = {
@@ -159,7 +171,6 @@ async def handle_task(websocket, config):
                 else:
                     print("[CLI] ❌ Failed to extract downloaded file.")
                 
-                is_new_session = False
                 break # Task finished, go back to ask for next prompt
 
             elif event == "ERROR":
