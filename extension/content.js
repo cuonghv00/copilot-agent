@@ -1,22 +1,31 @@
 // content.js — DOM Automation for M365 Copilot Web
-// Responsibilities: Model Selection → Prompt Input → Send → Observe Response → Find Download
+// Responsibilities: Session ID extraction, Model Selection, Prompt Input, Send, Observe Response, Download
 
 const SELECTORS = {
     newChatButton: 'a[aria-label="New chat"], button[aria-label="New chat"]',
     modelSelector: '#gptModeSwitcher, button[aria-label="Model Selector"]',
     chatInput: '#m365-chat-editor-target-element',
     sendButton: 'button[aria-label="Send"], button.fai-SendButton',
-    temporaryChat: 'button[aria-label="Temporary chat"]',
+    // Indicators that response is fully complete
+    responseDone: '[data-testid="copy-button"], button[aria-label="Copy"], button[aria-label="Like"], button[aria-label="Dislike"]',
 };
 
-const MAX_RETRIES = 5;
-const RETRY_DELAY_MS = 2000;
+const MODEL_MAPPING = {
+    'auto':   ['Auto'],
+    'quick':  ['Quick response'],
+    'think':  ['Think deeper'],
+    'gpt5.5': ['GPT', '5.5'],
+    'gpt 5.5': ['GPT', '5.5'],
+    'gpt5.6': ['GPT', '5.6'],
+    'gpt 5.6': ['GPT', '5.6'],
+    'sonnet': ['Anthropic', 'Sonnet'],
+    'opus':   ['Anthropic', 'Opus'],
+    'gpt':    ['OpenAI'],
+};
 
-// --- Utility Functions ---
+// --- Utilities ---
 
-function sleep(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
-}
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 async function waitForElement(selector, timeoutMs = 15000) {
     const start = Date.now();
@@ -36,92 +45,83 @@ function sendError(message, step) {
     chrome.runtime.sendMessage({ type: 'ERROR', message, step });
 }
 
-// --- Step 0: New Chat ---
+// --- Session ID ---
 
-async function clickNewChat() {
-    sendStatus('NEW_CHAT', 'Looking for New Chat button...');
-    const btn = await waitForElement(SELECTORS.newChatButton, 5000);
-    if (btn) {
-        btn.click();
-        sendStatus('NEW_CHAT_CLICKED', 'Clicked New Chat button');
-        await sleep(1000);
-    } else {
-        sendStatus('NEW_CHAT_SKIPPED', 'New Chat button not found, continuing...');
+function extractAndReportSessionId() {
+    const match = window.location.href.match(/\/conversation\/([0-9a-f-]{36})/i);
+    if (match) {
+        chrome.runtime.sendMessage({ type: 'SESSION_ID', id: match[1] });
     }
 }
 
-const MODEL_MAPPING = {
-    'auto': ['Auto'],
-    'quick': ['Quick response'],
-    'think': ['Think deeper'],
-    'sonnet': ['Claude', 'Sonnet'],
-    'opus': ['Claude', 'Opus'],
-    'gpt5.5': ['GPT', '5.5'],
-    'gpt5.6': ['GPT', '5.6']
-};
+// --- Step 0: New Chat ---
+
+async function clickNewChat() {
+    const btn = await waitForElement(SELECTORS.newChatButton, 5000);
+    if (btn) {
+        btn.click();
+        sendStatus('NEW_CHAT_CLICKED', 'Clicked New Chat');
+        await sleep(1500);
+    }
+}
+
+// --- Step 1: Model Selection ---
 
 async function selectModel(modelName) {
-    sendStatus('MODEL_SELECTION', `Looking for model selector for ${modelName}...`);
+    sendStatus('MODEL_SELECTION', `Selecting model: ${modelName}`);
     const modelBtn = await waitForElement(SELECTORS.modelSelector, 5000);
     if (!modelBtn) {
-        sendStatus('MODEL_SKIPPED', 'Model selector not found, skipping model selection.');
-        return true; // We don't fail, we just skip
+        sendStatus('MODEL_SKIPPED', 'Model selector not found');
+        return;
     }
 
     modelBtn.click();
     await sleep(1000);
 
-    const findMenuItem = (name) => {
-        const items = Array.from(document.querySelectorAll('.fai-CapabilityPickerMenuItem, [role="menuitem"], [role="option"]'));
-        return items.find(item => item.textContent.toLowerCase().includes(name.toLowerCase()));
+    const findMenuItem = (text) => {
+        const items = Array.from(document.querySelectorAll(
+            '.fai-CapabilityPickerMenuItem, [role="menuitem"], [role="option"]'
+        ));
+        return items.find(el => el.textContent.toLowerCase().includes(text.toLowerCase()));
     };
 
     const path = MODEL_MAPPING[modelName.toLowerCase()] || [modelName];
-    let target = null;
+    let found = false;
 
-    for (let i = 0; i < path.length; i++) {
-        const step = path[i];
-        target = findMenuItem(step);
-        
-        if (target) {
-            target.click();
-            await sleep(1000);
+    for (const step of path) {
+        const item = findMenuItem(step);
+        if (item) {
+            item.click();
+            await sleep(800);
+            found = true;
         } else {
             break;
         }
     }
 
-    if (target) {
-        sendStatus('MODEL_SELECTED', `Selected model: ${modelName}`);
-        await sleep(500);
-        return true;
-    } else {
+    if (!found) {
+        // Close the menu if model not found
         modelBtn.click();
-        sendStatus('MODEL_SKIPPED', `Model "${modelName}" not found in menu, continuing with current`);
+        sendStatus('MODEL_SKIPPED', `Model "${modelName}" not in menu, using current`);
         await sleep(500);
-        return true;
+    } else {
+        sendStatus('MODEL_SELECTED', `Model selected: ${modelName}`);
     }
 }
 
 // --- Step 2: Input Prompt ---
 
 async function inputPrompt(fullPrompt) {
-    sendStatus('PROMPT_FINDING', 'Looking for chat input element...');
-    const editor = await waitForElement(SELECTORS.chatInput, 5000);
+    sendStatus('PROMPT_FINDING', 'Finding chat input…');
+    let editor = await waitForElement(SELECTORS.chatInput, 8000);
     if (!editor) {
-        // Fallback selector for generic textareas if M365 chat editor isn't found
-        const fallbackEditor = await waitForElement('textarea, [contenteditable="true"]', 3000);
-        if (!fallbackEditor) {
-            sendError('Chat input element not found. UI may have changed.', 'PROMPT_INPUT');
-            return false;
-        }
-        sendStatus('PROMPT_FINDING', 'Found fallback chat input element.');
-        return await typeIntoEditor(fallbackEditor, fullPrompt);
+        editor = await waitForElement('[contenteditable="true"]', 3000);
     }
-    return await typeIntoEditor(editor, fullPrompt);
-}
+    if (!editor) {
+        sendError('Chat input not found', 'PROMPT_INPUT');
+        return false;
+    }
 
-async function typeIntoEditor(editor, fullPrompt) {
     editor.focus();
     await sleep(300);
 
@@ -130,139 +130,196 @@ async function typeIntoEditor(editor, fullPrompt) {
     document.execCommand('delete', false, null);
     await sleep(200);
 
-    // Insert text using execCommand for Fluent UI React compatibility
-    document.execCommand('insertText', false, fullPrompt);
-    await sleep(300);
-
-    // Dispatch events to ensure React state updates
-    editor.dispatchEvent(new Event('input', { bubbles: true }));
-    editor.dispatchEvent(new Event('change', { bubbles: true }));
-
-    sendStatus('PROMPT_ENTERED', 'Prompt typed into chat input');
-    return true;
-}
-
-// --- Step 3: Click Send ---
-
-async function clickSend() {
-    sendStatus('SENDING', 'Looking for Send button...');
-    await sleep(500);
-    const sendBtn = await waitForElement(SELECTORS.sendButton, 5000);
-    if (!sendBtn) {
-        // Fallback: look for button containing "Submit" or "Send" SVG or aria-label
-        const fallbackBtn = await waitForElement('button[title*="Submit"], button[aria-label*="Submit"], button svg', 3000);
-        if (fallbackBtn) {
-            let target = fallbackBtn.tagName === 'svg' ? fallbackBtn.closest('button') : fallbackBtn;
-            if (target) {
-                target.click();
-                sendStatus('PROMPT_SENT', 'Prompt sent to Copilot via fallback button');
-                return true;
-            }
+    // Insert text preserving newlines.
+    // execCommand('insertText') strips \n in most contenteditable editors,
+    // so we split by line and use insertParagraph between each line.
+    const lines = fullPrompt.split('\n');
+    for (let i = 0; i < lines.length; i++) {
+        if (lines[i].length > 0) {
+            document.execCommand('insertText', false, lines[i]);
         }
-        
-        sendError('Send button not found. UI may have changed.', 'SEND');
-        return false;
+        if (i < lines.length - 1) {
+            document.execCommand('insertParagraph', false, null);
+        }
     }
 
-    sendBtn.click();
-    sendStatus('PROMPT_SENT', 'Prompt sent to Copilot');
+    await sleep(300);
+    editor.dispatchEvent(new Event('input', { bubbles: true }));
+    editor.dispatchEvent(new Event('change', { bubbles: true }));
+    sendStatus('PROMPT_ENTERED', 'Prompt entered');
     return true;
 }
 
-// --- Step 4: Observe Response & Find Download ---
+// --- Step 3: Send ---
+
+async function clickSend() {
+    await sleep(500);
+    const btn = await waitForElement(SELECTORS.sendButton, 5000);
+    if (!btn) {
+        sendError('Send button not found', 'SEND');
+        return false;
+    }
+    btn.click();
+    sendStatus('PROMPT_SENT', 'Prompt sent');
+    return true;
+}
+
+// --- Step 4: Observe Response ---
 
 async function observeResponse() {
-    sendStatus('WAITING_RESPONSE', 'Waiting for Copilot to generate response...');
+    sendStatus('WAITING_RESPONSE', 'Waiting for Copilot response…');
 
     return new Promise((resolve) => {
-        let lastMutationTime = Date.now();
-        let checkInterval = null;
+        let lastMutation = Date.now();
         let downloadFound = false;
+        let settled = false;
 
-        const observer = new MutationObserver((mutations) => {
-            lastMutationTime = Date.now();
+        function cleanup() {
+            observer.disconnect();
+            clearInterval(checker);
+            clearTimeout(hardTimeout);
+        }
 
-            // Check for download links in new content
+        function finish(result) {
+            if (settled) return;
+            settled = true;
+            cleanup();
+            resolve(result);
+        }
+
+        const observer = new MutationObserver(() => {
+            lastMutation = Date.now();
             if (!downloadFound) {
-                const downloadLink = findDownloadLink();
-                if (downloadLink) {
+                const dl = findDownloadLink();
+                if (dl) {
                     downloadFound = true;
-                    // Wait a bit more to ensure response is fully complete
+                    // Wait a moment for response text to fully render
                     setTimeout(() => {
-                        cleanup();
-                        resolve(downloadLink);
-                    }, 3000);
+                        const summary = extractResponseSummary();
+                        if (summary) {
+                            chrome.runtime.sendMessage({ type: 'RESPONSE_TEXT', text: summary });
+                        }
+                        finish(dl);
+                    }, 2500);
                 }
             }
         });
 
         observer.observe(document.body, { childList: true, subtree: true, characterData: true });
 
-        // Periodically check if response has stopped generating
-        checkInterval = setInterval(() => {
-            const elapsed = Date.now() - lastMutationTime;
+        // Check periodically for "response done" signals
+        const checker = setInterval(() => {
+            const elapsed = Date.now() - lastMutation;
 
-            // If no mutations for 10 seconds, response is likely complete
-            if (elapsed > 10000 && !downloadFound) {
-                const downloadLink = findDownloadLink();
-                if (downloadLink) {
+            // Check if response-complete indicators are present
+            const doneIndicator = document.querySelector(SELECTORS.responseDone);
+            if (doneIndicator && elapsed > 2000 && !downloadFound) {
+                const dl = findDownloadLink();
+                if (dl) {
                     downloadFound = true;
-                    cleanup();
-                    resolve(downloadLink);
-                } else {
-                    // Response finished but no download link found
-                    cleanup();
-                    resolve(null);
+                    const summary = extractResponseSummary();
+                    if (summary) {
+                        chrome.runtime.sendMessage({ type: 'RESPONSE_TEXT', text: summary });
+                    }
+                    finish(dl);
+                } else if (elapsed > 8000) {
+                    // Response done but no download link
+                    const summary = extractResponseSummary();
+                    if (summary) {
+                        chrome.runtime.sendMessage({ type: 'RESPONSE_TEXT', text: summary });
+                    }
+                    finish(null);
                 }
+            }
+
+            // Fallback: no mutations for 12s
+            if (elapsed > 12000 && !downloadFound) {
+                const dl = findDownloadLink();
+                const summary = extractResponseSummary();
+                if (summary) chrome.runtime.sendMessage({ type: 'RESPONSE_TEXT', text: summary });
+                finish(dl);
             }
         }, 2000);
 
-        // Timeout after 5 minutes
-        const timeout = setTimeout(() => {
-            if (!downloadFound) {
-                cleanup();
-                resolve(null);
-            }
-        }, 300000);
-
-        function cleanup() {
-            observer.disconnect();
-            clearInterval(checkInterval);
-            clearTimeout(timeout);
-        }
+        // Hard timeout: 8 minutes
+        const hardTimeout = setTimeout(() => finish(null), 480000);
     });
 }
 
+// --- Extract response text summary ---
+
+function extractResponseSummary() {
+    // Get the last assistant message block
+    const blocks = document.querySelectorAll(
+        '[data-testid*="message"], .message-content, [class*="response"], [class*="assistant"]'
+    );
+    if (blocks.length === 0) return '';
+
+    const last = blocks[blocks.length - 1];
+    const text = last.innerText || last.textContent || '';
+    // Return first 1500 chars as summary
+    return text.trim().slice(0, 1500);
+}
+
+// --- Find Download Link ---
+
+/** Return true if URL looks like an actual downloadable file, not a page navigation URL */
+function isDownloadableUrl(url) {
+    if (!url) return false;
+    if (url.startsWith('blob:')) return true;
+    if (url.startsWith('data:')) return true;
+    // Must have a file extension that suggests a download
+    try {
+        const u = new URL(url);
+        const path = u.pathname.toLowerCase();
+        // Reject if it's a copilot chat/conversation page URL
+        if (u.hostname.includes('m365.cloud.microsoft') || u.hostname.includes('copilot.microsoft.com')) {
+            if (path.includes('/chat') || path.includes('/conversation')) return false;
+        }
+        // Accept if path ends with a known file extension
+        return /\.(zip|tar\.gz|tgz|gz|rar|7z|pdf|docx?|xlsx?)$/i.test(path);
+    } catch {
+        return false;
+    }
+}
+
 function findDownloadLink() {
-    // Strategy 1: Look for <a> tags with download attribute
-    const downloadAnchors = document.querySelectorAll('a[download]');
-    for (const a of downloadAnchors) {
+    // Priority 1: <a download> with .zip href — must be real file URL
+    for (const a of document.querySelectorAll('a[download]')) {
+        if (isDownloadableUrl(a.href)) {
+            return { url: a.href, filename: a.download || 'output.zip' };
+        }
+    }
+
+    // Priority 2: <a> with .zip in href
+    for (const a of document.querySelectorAll('a[href*=".zip"]')) {
+        if (isDownloadableUrl(a.href)) {
+            return { url: a.href, filename: a.download || 'output.zip' };
+        }
+    }
+
+    // Priority 3: blob: URL links
+    for (const a of document.querySelectorAll('a[href^="blob:"]')) {
         if (a.href) return { url: a.href, filename: a.download || 'output.zip' };
     }
 
-    // Strategy 2: Look for links to zip files
-    const zipLinks = document.querySelectorAll('a[href*=".zip"]');
-    for (const a of zipLinks) {
-        if (a.href) return { url: a.href, filename: a.download || 'output.zip' };
+    // Priority 4: aria-label containing "Download" — validate URL
+    for (const a of document.querySelectorAll('a[aria-label*="Download" i]')) {
+        if (isDownloadableUrl(a.href)) {
+            return { url: a.href, filename: a.download || 'output.zip' };
+        }
     }
 
-    // Strategy 2.5: Look for links starting with "Download " in aria-label
-    const downloadAria = document.querySelectorAll('a[aria-label^="Download " i], a[aria-label^="download " i]');
-    for (const a of downloadAria) {
-        if (a.href) return { url: a.href, filename: a.download || 'output.zip' };
-    }
-
-    // Strategy 3: Look for buttons with download-related text
+    // Priority 5: button with "Download" text (click it, let browser handle)
     const buttons = Array.from(document.querySelectorAll('button'));
-    const downloadBtn = buttons.find(b => {
-        const text = (b.textContent || '').toLowerCase();
-        const label = (b.getAttribute('aria-label') || '').toLowerCase();
-        return text.includes('download') || label.includes('download');
+    const dlBtn = buttons.find(b => {
+        const t = (b.textContent || '').toLowerCase().trim();
+        const l = (b.getAttribute('aria-label') || '').toLowerCase();
+        return (t === 'download' || t.startsWith('download ') || l.includes('download'));
     });
-    if (downloadBtn) {
-        // Click the download button and let the browser handle it
-        downloadBtn.click();
-        return { url: '__CLICKED_DOWNLOAD_BUTTON__', filename: 'output.zip' };
+    if (dlBtn) {
+        dlBtn.click();
+        return { url: '__BUTTON_CLICKED__', filename: 'output.zip' };
     }
 
     return null;
@@ -271,108 +328,88 @@ function findDownloadLink() {
 // --- Main Task Executor ---
 
 async function executeTask(taskData) {
-    const { model, prompt, system_instruction, onedrive_link, is_new_session } = taskData;
-
-    // Build full prompt
-    const fullPrompt = is_new_session ? [
-        system_instruction || '',
-        '',
-        `Link OneDrive chứa mã nguồn: ${onedrive_link}`,
-        '',
-        `YÊU CẦU: ${prompt}`,
-        '',
-        'QUY ĐỊNH KẾT QUẢ: Sau khi hoàn thành, hãy tạo file nén (.zip) chứa toàn bộ các file đã được chỉnh sửa và cung cấp link/nút TẢI VỀ cho file này.'
-    ].join('\n') : [
-        `YÊU CẦU TIẾP THEO: ${prompt}`,
-        '',
-        'QUY ĐỊNH KẾT QUẢ: Sau khi hoàn thành, hãy cập nhật lại file nén (.zip) chứa toàn bộ mã nguồn và cung cấp link/nút TẢI VỀ cho tôi.'
-    ].join('\n');
+    const { model, prompt, is_new_session } = taskData;
 
     if (is_new_session) {
-        // Step 0: Click New Chat to ensure a fresh session
         await clickNewChat();
-
-        // Step 1: Select model
-        if (model) {
-            const modelOk = await selectModel(model);
-            if (!modelOk) return;
-        }
     }
-
-    // Step 2: Input prompt
-    const inputOk = await inputPrompt(fullPrompt);
+    
+    if (model) {
+        await selectModel(model);
+    }
+    
+    const inputOk = await inputPrompt(prompt);
     if (!inputOk) return;
 
-    // Step 3: Click Send
     const sendOk = await clickSend();
     if (!sendOk) return;
 
-    // Step 4: Observe response and find download link
+    // After send, extract and report session ID (URL may update)
+    await sleep(2000);
+    extractAndReportSessionId();
+
     const downloadData = await observeResponse();
 
-    if (downloadData && downloadData.url !== '__CLICKED_DOWNLOAD_BUTTON__') {
-        sendStatus('DOWNLOADING', `Found download URL: ${downloadData.url.substring(0, 50)}...`);
-        
-        try {
-            if (downloadData.url.startsWith('blob:')) {
-                sendStatus('DOWNLOADING', 'Fetching blob to convert to Base64...');
-                const res = await fetch(downloadData.url);
-                const blob = await res.blob();
-                const reader = new FileReader();
-                reader.onloadend = () => {
-                    try {
-                        chrome.runtime.sendMessage({
-                            type: 'DOWNLOAD_FILE',
-                            url: reader.result,
-                            filename: `CopilotAgent/${downloadData.filename}`
-                        });
-                        sendStatus('DOWNLOADING', 'Sent Base64 payload to background script.');
-                    } catch (e) {
-                        sendError(`Failed to send Base64 payload: ${e.message}`, 'DOWNLOAD');
-                    }
-                };
-                reader.readAsDataURL(blob);
-            } else {
+    // Extract session ID again after response is complete because URL might update late
+    extractAndReportSessionId();
+
+    if (!downloadData) {
+        // No download link — this is a normal text-only response.
+        // RESPONSE_TEXT was already sent. Signal completion to Python CLI.
+        chrome.runtime.sendMessage({ type: 'TASK_COMPLETE_NO_FILE' });
+        return;
+    }
+
+    if (downloadData.url === '__BUTTON_CLICKED__') {
+        sendStatus('DOWNLOADING', 'Clicked download button, waiting for browser…');
+        return; // background.js download listener will catch it
+    }
+
+    sendStatus('DOWNLOADING', `Downloading: ${downloadData.url.substring(0, 60)}…`);
+
+    try {
+        if (downloadData.url.startsWith('blob:')) {
+            const res = await fetch(downloadData.url);
+            const blob = await res.blob();
+            const reader = new FileReader();
+            reader.onloadend = () => {
                 chrome.runtime.sendMessage({
                     type: 'DOWNLOAD_FILE',
-                    url: downloadData.url,
-                    filename: `CopilotAgent/${downloadData.filename}`
+                    url: reader.result,
+                    filename: `CopilotAgent/${downloadData.filename}`,
                 });
-            }
-        } catch (e) {
-            sendError(`Failed to fetch blob URL: ${e.message}`, 'DOWNLOAD');
+            };
+            reader.readAsDataURL(blob);
+        } else {
+            chrome.runtime.sendMessage({
+                type: 'DOWNLOAD_FILE',
+                url: downloadData.url,
+                filename: `CopilotAgent/${downloadData.filename}`,
+            });
         }
-    } else if (downloadData && downloadData.url === '__CLICKED_DOWNLOAD_BUTTON__') {
-        sendStatus('DOWNLOADING', 'Clicked download button, waiting for browser to handle...');
-        // The browser download will be caught by background.js download listener
-    } else {
-        sendError('No download link found in Copilot response', 'DOWNLOAD_DETECTION');
+    } catch (e) {
+        sendError(`Failed to download: ${e.message}`, 'DOWNLOAD');
     }
 }
 
-// --- Initialization & Task Pulling ---
+// --- Initialization ---
 
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message) => {
     if (message.type === 'EXECUTE_TASK') {
-        console.log('[CopilotAgent CS] Received task directly:', message.taskData);
-        sendStatus('TASK_RECEIVED', 'Content script received task directly for same session...');
+        sendStatus('TASK_RECEIVED', 'Executing task in current session…');
         executeTask(message.taskData);
     }
 });
 
-console.log('[CopilotAgent CS] Content script loaded on', window.location.href);
+// Report session ID on load
+extractAndReportSessionId();
 
-// Wait a bit for the SPA to render, then ask background script if there is a pending task
+// Pull pending task from background on page load
 setTimeout(() => {
     chrome.runtime.sendMessage({ type: 'PAGE_READY_PULL_TASK' }, (response) => {
-        if (chrome.runtime.lastError) {
-            console.error('[CopilotAgent CS] Error pulling task:', chrome.runtime.lastError.message);
-            return;
-        }
-
-        if (response && response.hasTask) {
-            console.log('[CopilotAgent CS] Pulled task:', response.taskData);
-            sendStatus('TASK_RECEIVED', 'Content script pulled task and is executing...');
+        if (chrome.runtime.lastError) return;
+        if (response?.hasTask) {
+            sendStatus('TASK_RECEIVED', 'Pulled pending task…');
             executeTask(response.taskData);
         }
     });
