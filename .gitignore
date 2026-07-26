@@ -1,0 +1,32 @@
+# Environments
+.venv/
+env/
+venv/
+ENV/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+
+# User specific configuration and history
+.copilot-agent-state.json
+.copilot-agent-history
+
+# Demo and test projects
+my_project/
+my_project_sync/
+demo_project/
+my_project_downloads/
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db

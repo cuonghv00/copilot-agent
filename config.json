@@ -1,6 +1,6 @@
 {
-  "repo_path": "./my_project",
-  "sync_path": "./my_project_sync",
+  "repo_path": "./demo_project/my_project",
+  "sync_path": "./demo_project/my_project_sync",
   "download_path": "~/Downloads/CopilotAgent",
   "onedrive_link": "https://example.com/{zip_filename}",
   "copilot_base_url": "https://m365.cloud.microsoft/chat",
@@ -8,9 +8,15 @@
   "default_model": "auto",
   "verify_command": "python3 -m unittest discover",
   "max_retry_on_failure": 1,
-  "zip_exclude_dirs": [".git", "__pycache__", "node_modules", ".venv"],
+  "zip_exclude_dirs": [
+    ".git",
+    "__pycache__",
+    "node_modules",
+    ".venv"
+  ],
   "active_skill": "default",
   "skills_dir": "./skills",
   "session_state_file": "./.copilot-agent-state.json",
-  "sync_command": ""
+  "sync_command": "",
+  "sync_delay": 10
 }
