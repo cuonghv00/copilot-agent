@@ -3,7 +3,7 @@
 
 let ws = null;
 let copilotTabId = null;
-const WS_URL = 'ws://localhost:8765';
+const DEFAULT_WS_PORT = 8765;  // fallback — override via extension Options
 const COPILOT_BASE_URL = 'https://m365.cloud.microsoft/chat';
 
 // --- WebSocket Connection ---
@@ -11,11 +11,14 @@ const COPILOT_BASE_URL = 'https://m365.cloud.microsoft/chat';
 let reconnectDelay = 5000;
 const MAX_RECONNECT_DELAY = 30000;
 
-function connectWebSocket() {
-    ws = new WebSocket(WS_URL);
+async function connectWebSocket() {
+    // Đọc port từ chrome.storage.local (do user cấu hình qua Options page)
+    const { wsPort = DEFAULT_WS_PORT } = await chrome.storage.local.get({ wsPort: DEFAULT_WS_PORT });
+    const wsUrl = `ws://localhost:${wsPort}`;
+    ws = new WebSocket(wsUrl);
 
     ws.onopen = () => {
-        console.log('[CopilotAgent BG] Connected to Python CLI');
+        console.log(`[CopilotAgent BG] Connected to Python CLI on ${wsUrl}`);
         reconnectDelay = 5000; // reset on success
     };
 
@@ -182,6 +185,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return;
     }
 
+    if (message.type === 'RECONNECT_WS') {
+        // Called from options page after port change
+        if (ws) ws.close();
+        connectWebSocket();
+        return;
+    }
+
 });
 
 // --- Download Completion ---
@@ -194,12 +204,23 @@ chrome.downloads.onChanged.addListener((delta) => {
             if (results.length > 0) {
                 const filepath = results[0].filename;
                 const filename = filepath.split('/').pop().split('\\').pop();
-                sendToServer({
-                    event: 'TASK_COMPLETE',
-                    status: 'FILE_DOWNLOADED',
-                    filename,
-                    filepath,
-                });
+                // Only treat as a valid code archive — reject CSV/JSON/PDF/etc.
+                const isArchive = /\.(zip|tar\.gz|tgz|gz|rar|7z)$/i.test(filename);
+                if (isArchive) {
+                    sendToServer({
+                        event: 'TASK_COMPLETE',
+                        status: 'FILE_DOWNLOADED',
+                        filename,
+                        filepath,
+                    });
+                } else {
+                    console.warn(`[CopilotAgent BG] Downloaded file is not a zip archive: ${filename}. Ignoring.`);
+                    sendToServer({
+                        event: 'TASK_COMPLETE',
+                        status: 'NO_FILE',
+                        message: `Downloaded file is not a zip: ${filename}`,
+                    });
+                }
                 activeDownloadId = null;
             }
         });

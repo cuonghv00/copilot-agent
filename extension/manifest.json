@@ -3,6 +3,7 @@
   "name": "Copilot Agent",
   "version": "0.1.0",
   "description": "Automates M365 Copilot Web for AI coding agent loop",
+  "options_page": "options.html",
   "permissions": [
     "downloads",
     "storage",

@@ -310,12 +310,20 @@ function findDownloadLink() {
         }
     }
 
-    // Priority 5: button with "Download" text (click it, let browser handle)
+    // Priority 5: button with "Download" text that also suggests a zip/code/archive file.
+    // We intentionally skip generic "Download" buttons (e.g. CSV export) to avoid downloading
+    // non-zip files. Only click if the button context hints at a zip or source-code archive.
+    const _zipHints = ['zip', 'source', 'code', 'archive', 'project', '.zip'];
     const buttons = Array.from(document.querySelectorAll('button'));
     const dlBtn = buttons.find(b => {
         const t = (b.textContent || '').toLowerCase().trim();
         const l = (b.getAttribute('aria-label') || '').toLowerCase();
-        return (t === 'download' || t.startsWith('download ') || l.includes('download'));
+        const isDownloadBtn = (t === 'download' || t.startsWith('download ') || l.includes('download'));
+        if (!isDownloadBtn) return false;
+        // Accept only if nearby context or label hints at zip/archive
+        const ctx = (b.closest('[data-testid], .message-content, article, section')
+            ?.textContent || '').toLowerCase();
+        return _zipHints.some(h => l.includes(h) || t.includes(h) || ctx.includes(h));
     });
     if (dlBtn) {
         dlBtn.click();

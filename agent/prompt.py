@@ -48,9 +48,6 @@ def build_full_prompt(
         parts.append(skill_content)
 
     if request_output:
-        if is_new_session:
-            parts.append(OUTPUT_RULES_TEMPLATE)
-        else:
-            parts.append(OUTPUT_RULES_SHORT)
+        parts.append(OUTPUT_RULES_TEMPLATE)
 
     return "\n".join(parts)

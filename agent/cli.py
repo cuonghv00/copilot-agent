@@ -26,25 +26,97 @@ async def main_loop():
     state = AgentState(state_file)
 
     runner = TaskRunner(config, state)
-    repo_path = Path(config["repo_path"]).expanduser().resolve()
     sync_path = Path(config["sync_path"]).expanduser().resolve()
     max_retry = config.get("max_retry_on_failure", 1)
     sync_command = config.get("sync_command")
     sync_delay = config.get("sync_delay", 0)
+    exclude_dirs = config.get("zip_exclude_dirs", [".git", "__pycache__", "node_modules", ".venv"])
 
     port = config["websocket_port"]
     server = await websockets.serve(runner.handle_connection, "0.0.0.0", port)
     print_sys(f"WebSocket server on ws://localhost:{port} — waiting for extension…", "dim")
 
-    print_sys("Zipping repository…", "dim")
-    repo_name = repo_path.name
-    zip_filename = f"{repo_name}.zip"
-    zip_output = sync_path / zip_filename
-    await asyncio.to_thread(zip_repo, repo_path, zip_output, sync_command, sync_delay)
-    print_sys(f"✓ Zipped → {zip_output}", "green")
-
+    # ── Hỏi repo path: nhập để zip+sync, Enter để bỏ qua ──
     history_path = Path("~/.copilot-agent-history").expanduser()
     prompt_session = PromptSession(history=FileHistory(str(history_path)))
+
+    # Đợi extension kết nối trước khi hiện prompt nhập repo path
+    print_sys("Waiting for Chrome Extension… (mở extension rồi nhận Enter để bỏ qua)", "dim")
+    try:
+        await asyncio.wait_for(runner.connected_event.wait(), timeout=None)
+    except asyncio.CancelledError:
+        pass
+
+    default_repo = config.get("repo_path", "")
+    print_sys(
+        f"Nhập đường dẫn repo để zip & sync OneDrive "
+        f"(Enter để bỏ qua) [{default_repo}]: ",
+        "cyan",
+    )
+
+    # ── Nhập repo path với tự động retry (tối đa 2 lần nhập sai) ──
+    _MAX_RETRIES = 2
+    _bad_attempts = 0
+    include_onedrive_link = False
+
+    while True:
+        try:
+            repo_input = (await prompt_session.prompt_async("  Repo path: ")).strip()
+        except (EOFError, KeyboardInterrupt):
+            repo_input = ""
+
+        if not repo_input:
+            # Người dùng nhận Enter — bỏ qua
+            print_sys("⏭ Bỏ qua zip — không đính kèm link OneDrive vào prompt đầu tiên.", "dim")
+            break
+
+        try:
+            repo_path = Path(repo_input).expanduser().resolve()
+        except (RuntimeError, OSError) as _e:
+            _bad_attempts += 1
+            remaining = _MAX_RETRIES - _bad_attempts
+            if remaining > 0:
+                print_sys(
+                    f"❌ Path không hợp lệ ({_e}). "
+                    f"Vui lòng nhập lại ({remaining} lần còn lại).",
+                    "yellow",
+                )
+            else:
+                print_sys(
+                    f"⚠ Path không hợp lệ ({_e}). "
+                    "Đã vượt quá số lần thử. Bỏ qua zip.",
+                    "red",
+                )
+                break
+            continue
+
+        if repo_path.exists():
+            # Path hợp lệ — thực hiện zip
+            repo_name = repo_path.name
+            zip_output = sync_path / f"{repo_name}.zip"
+            print_sys("Zipping repository…", "dim")
+            await asyncio.to_thread(zip_repo, repo_path, zip_output, sync_command, sync_delay, exclude_dirs)
+            print_sys(f"✓ Zipped → {zip_output}", "green")
+            include_onedrive_link = True
+            runner.repo_path = repo_path
+            break
+
+        # Path không tồn tại
+        _bad_attempts += 1
+        remaining = _MAX_RETRIES - _bad_attempts
+        if remaining > 0:
+            print_sys(
+                f"❌ Path không tồn tại: {repo_path}. "
+                f"Vui lòng nhập lại ({remaining} lần còn lại).",
+                "yellow",
+            )
+        else:
+            print_sys(
+                f"⚠ Path không tồn tại: {repo_path}. "
+                "Đã vượt quá số lần thử. Bỏ qua zip.",
+                "red",
+            )
+            break
 
     current_model = state.model or config["default_model"]
     is_new_session = True
@@ -87,9 +159,12 @@ async def main_loop():
             continue
 
         if cmd.lower() == "/zip":
+            _rp = runner.repo_path
+            _zo = sync_path / f"{_rp.name}.zip"
             print_sys("Re-zipping…", "dim")
-            await asyncio.to_thread(zip_repo, repo_path, zip_output, sync_command, sync_delay)
-            print_sys(f"✓ Re-zipped → {zip_output}", "green")
+            await asyncio.to_thread(zip_repo, _rp, _zo, sync_command, sync_delay, exclude_dirs)
+            print_sys(f"✓ Re-zipped → {_zo}", "green")
+            include_onedrive_link = True
             continue
 
         if cmd.lower() == "/diff":
@@ -196,9 +271,14 @@ async def main_loop():
         request_output = output_mode or inline_out
 
         print_user_msg(clean_cmd)
-        result = await runner.send_task(clean_cmd, is_new_session, current_model,
-                                        request_output=request_output)
-        is_new_session = False 
+        result = await runner.send_task(
+            clean_cmd, is_new_session, current_model,
+            request_output=request_output,
+            include_onedrive_link=include_onedrive_link,
+        )
+        is_new_session = False
+        # Chỉ gắn link OneDrive vào prompt đầu tiên
+        include_onedrive_link = False
 
         if result is None:
             continue

@@ -24,10 +24,13 @@ class TaskRunner:
         self._current_model = config["default_model"]
         self.status_history = []
         self.live_display = None
+        self._task_lock = asyncio.Lock()  # LOG-1: serialize tasks — task 2 chờ task 1 xong
+        self.connected_event = asyncio.Event()  # bắt khi extension kết nối lần đầu
 
     async def handle_connection(self, websocket):
         self.ws = websocket
         self.connected = True
+        self.connected_event.set()  # thông báo cho cli biết extension đã kết nối
         print_sys("✓ Chrome Extension connected", "green")
         try:
             get_app().invalidate()
@@ -102,65 +105,78 @@ class TaskRunner:
                 self._pending.set_result({"type": "error", "message": f"[{step}] {msg}"})
 
     async def send_task(
-        self, user_prompt: str, is_new_session: bool, model: str, request_output: bool = False
+        self, user_prompt: str, is_new_session: bool, model: str,
+        request_output: bool = False,
+        include_onedrive_link: bool = True,
     ) -> dict | None:
         if not self.connected or not self.ws:
             print_sys("❌ Extension chưa kết nối. Hãy mở browser và đảm bảo extension đang chạy.", "red")
             return None
 
-        if is_new_session:
-            self.state.last_session_id = ""
-            self.state.save()
+        if self._task_lock.locked():
+            print_sys("⏳ Task trước đang chạy, đang chờ hoàn thành…", "yellow")
 
-        self._current_model = model
-        skill_content = load_skill_content(user_prompt, self.skills_dir)
-        
-        repo_name = self.repo_path.name
-        zip_filename = f"{repo_name}.zip"
-        dynamic_link = self.config.get("onedrive_link", "").replace("{zip_filename}", zip_filename).replace("{repo_name}", repo_name)
-        
-        full_prompt = build_full_prompt(
-            user_prompt, dynamic_link, skill_content,
-            request_output, is_new_session
-        )
+        async with self._task_lock:
+            if is_new_session:
+                self.state.last_session_id = ""
+                self.state.save()
 
-        payload = {
-            "action": "START_TASK",
-            "onedrive_link": dynamic_link,
-            "model": model,
-            "prompt": full_prompt,
-            "is_new_session": is_new_session,
-            "last_session_id": self.state.last_session_id,
-        }
+            self._current_model = model
+            skill_content = load_skill_content(user_prompt, self.skills_dir)
 
-        self.task_running = True
-        self.status_history = ["↳ Starting task…"]
-        loop = asyncio.get_running_loop()
-        self._pending = loop.create_future()
+            repo_name = self.repo_path.name
+            zip_filename = f"{repo_name}.zip"
+            # Chỉ build link khi include_onedrive_link=True (user đã zip repo)
+            dynamic_link = ""
+            if include_onedrive_link:
+                dynamic_link = (
+                    self.config.get("onedrive_link", "")
+                    .replace("{zip_filename}", zip_filename)
+                    .replace("{repo_name}", repo_name)
+                )
 
-        try:
-            with Live(get_agent_panel(self.status_history[0]), refresh_per_second=4, console=console) as live:
-                self.live_display = live
-                try:
-                    await self.ws.send(json.dumps(payload))
-                except websockets.exceptions.ConnectionClosed:
-                    self.task_running = False
-                    self._pending = None
-                    self.live_display = None
-                    return None
+            full_prompt = build_full_prompt(
+                user_prompt, dynamic_link, skill_content,
+                request_output, is_new_session
+            )
 
-                try:
-                    result = await asyncio.wait_for(asyncio.shield(self._pending), timeout=600)
-                except asyncio.TimeoutError:
-                    result = {"type": "error", "message": "Timeout (10 min) waiting for response"}
-                
-                self.status_history.append("↳ Done ✓")
-                if len(self.status_history) > 3:
-                    self.status_history.pop(0)
-                live.update(get_agent_panel("\n".join(self.status_history)))
-        finally:
-            self.task_running = False
-            self._pending = None
-            self.live_display = None
+            payload = {
+                "action": "START_TASK",
+                "onedrive_link": dynamic_link,
+                "model": model,
+                "prompt": full_prompt,
+                "is_new_session": is_new_session,
+                "last_session_id": self.state.last_session_id,
+            }
 
-        return result
+            self.task_running = True
+            self.status_history = ["↳ Starting task…"]
+            loop = asyncio.get_running_loop()
+            self._pending = loop.create_future()
+
+            try:
+                with Live(get_agent_panel(self.status_history[0]), refresh_per_second=4, console=console) as live:
+                    self.live_display = live
+                    try:
+                        await self.ws.send(json.dumps(payload))
+                    except websockets.exceptions.ConnectionClosed:
+                        self.task_running = False
+                        self._pending = None
+                        self.live_display = None
+                        return None
+
+                    try:
+                        result = await asyncio.wait_for(asyncio.shield(self._pending), timeout=600)
+                    except asyncio.TimeoutError:
+                        result = {"type": "error", "message": "Timeout (10 min) waiting for response"}
+
+                    self.status_history.append("↳ Done ✓")
+                    if len(self.status_history) > 3:
+                        self.status_history.pop(0)
+                    live.update(get_agent_panel("\n".join(self.status_history)))
+            finally:
+                self.task_running = False
+                self._pending = None
+                self.live_display = None
+
+            return result
