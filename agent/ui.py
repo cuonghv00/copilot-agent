@@ -1,6 +1,7 @@
 import shutil
 from rich import box
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
@@ -79,9 +80,9 @@ def print_verify(success: bool, output: str):
 
 def print_sys(msg: str, style: str = "dim"):
     if style:
-        console.print(f"[{style}]{msg}[/{style}]")
+        console.print(f"[{style}]{escape(msg)}[/{style}]")
     else:
-        console.print(msg)
+        console.print(escape(msg))
 
 def print_help():
     console.print(Panel(

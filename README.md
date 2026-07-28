@@ -10,6 +10,8 @@
 - [Kiến trúc hệ thống](#kiến-trúc-hệ-thống)
 - [Yêu cầu](#yêu-cầu)
 - [Cài đặt](#cài-đặt)
+- [Windows Setup (WSL)](#windows-setup-wsl)
+- [Windows Native (không WSL)](#windows-native-không-wsl)
 - [Cấu hình](#cấu-hình)
 - [Cài đặt Chrome Extension](#cài-đặt-chrome-extension)
 - [Sử dụng](#sử-dụng)
@@ -91,6 +93,219 @@ uv sync
 # Hoặc với pip
 pip install websockets rich prompt-toolkit
 ```
+
+---
+
+## Windows Setup (WSL)
+
+> **Khuyến nghị cho môi trường doanh nghiệp:** Agent chạy trong WSL, Chrome/Edge chạy trên Windows. Không cần cài Python hay công cụ nào vào Windows.
+
+### Bước 1 — Cài WSL (nếu chưa có)
+
+Mở PowerShell với quyền Admin:
+```powershell
+wsl --install
+# Khởi động lại máy, sau đó mở Ubuntu từ Start Menu
+```
+
+### Bước 2 — Cài `uv` portable trong WSL
+
+`uv` là package manager không cần quyền root, không cài vào system Python:
+
+```bash
+# Trong terminal WSL (Ubuntu)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+source $HOME/.local/bin/env   # hoặc mở lại terminal
+
+# Kiểm tra
+uv --version
+```
+
+> **Tại sao `uv`?** Tự quản lý Python interpreter, tạo `.venv` isolated, không đụng đến system packages. Hoàn toàn portable — xóa thư mục là sạch.
+
+### Bước 3 — Clone & khởi tạo project
+
+```bash
+# Trong WSL
+git clone <repo-url>
+cd copilot-agent
+
+# uv tự tải Python đúng version + cài dependencies
+uv sync
+```
+
+### Bước 4 — Xác định đường dẫn OneDrive
+
+OneDrive trên Windows được mount vào WSL tại `/mnt/c/Users/<tên>/OneDrive*/`. Tìm thư mục sync:
+
+```bash
+# Tìm thư mục OneDrive
+ls "/mnt/c/Users/$(cmd.exe /c 'echo %USERNAME%' 2>/dev/null | tr -d '\r')/"
+
+# Ví dụ kết quả điển hình:
+# /mnt/c/Users/cuonghv22/OneDrive - FPT Software/
+```
+
+Tạo thư mục sync trong OneDrive:
+```bash
+mkdir -p "/mnt/c/Users/cuonghv22/OneDrive - FPT Software/copilot-sync"
+```
+
+### Bước 5 — Cấu hình `config.json` cho Windows/WSL
+
+```json
+{
+  "repo_path": "/home/cuonghv22/projects/my-project",
+  "sync_path": "/mnt/c/Users/cuonghv22/OneDrive - FPT Software/copilot-sync",
+  "download_path": "/mnt/c/Users/cuonghv22/Downloads/CopilotAgent",
+  "onedrive_link": "https://<tenant>-my.sharepoint.com/:u:/r/personal/<user>/Documents/copilot-sync/{zip_filename}",
+  "sync_delay": 15,
+  "onedrive_link_delay_ms": 3000,
+  "reconnect_timeout_s": 60
+}
+```
+
+> **`sync_delay`:** OneDrive trên Windows cần thêm thời gian upload so với Linux native. Khuyến nghị 10–20 giây.
+
+### Bước 6 — Khởi động
+
+```bash
+# Trong WSL terminal
+uv run python main.py
+```
+
+Sau đó mở Chrome/Edge trên Windows, load extension và vào M365 Copilot.
+
+### Bước 7 — Lấy SharePoint link OneDrive
+
+Để lấy link dùng cho `onedrive_link` trong config:
+
+1. Mở OneDrive trên web (`https://<tenant>-my.sharepoint.com`)
+2. Vào thư mục `copilot-sync/`
+3. Chuột phải vào file `.zip` → **Share** → **Copy link**
+4. Lấy phần URL base, thay tên file bằng `{zip_filename}`
+
+```
+# Ví dụ link thực:
+https://fptsoftware362-my.sharepoint.com/:u:/r/personal/cuonghv22_fpt_com/Documents/copilot-sync/my-project.zip
+
+# Điền vào config (thay "my-project.zip" bằng {zip_filename}):
+"onedrive_link": "https://fptsoftware362-my.sharepoint.com/:u:/r/personal/cuonghv22_fpt_com/Documents/copilot-sync/{zip_filename}"
+```
+
+### Troubleshooting Windows/WSL
+
+| Vấn đề | Nguyên nhân | Giải pháp |
+|---|---|---|
+| Extension không kết nối được | Firewall Windows chặn port WSL | Chạy `wsl hostname -I` lấy IP WSL, điền vào extension options thay `localhost` |
+| OneDrive chưa sync kịp | Upload chậm | Tăng `sync_delay` lên 20–30s |
+| Copilot không nhận file | Paste quá nhanh | Tăng `onedrive_link_delay_ms` lên 4000–5000 |
+| Extension mất kết nối giữa chừng | Mạng chập chờn | `reconnect_timeout_s: 90` — agent tự chờ reconnect |
+| Đường dẫn không hợp lệ trong WSL | Dùng path Windows `C:\\...` | Dùng `/mnt/c/...` thay thế |
+
+### WSL Firewall (nếu extension không kết nối được)
+
+```powershell
+# Chạy trong PowerShell (Admin) trên Windows
+# Lấy IP của WSL
+$wslIp = (wsl hostname -I).Trim()
+Write-Host "WSL IP: $wslIp"
+
+# Thêm port proxy cho phép port 8765 từ Windows vào WSL
+netsh interface portproxy add v4tov4 listenport=8765 listenaddress=0.0.0.0 connectport=8765 connectaddress=$wslIp
+```
+
+Sau đó trong extension Options, thay `ws://localhost:8765` bằng `ws://<WSL-IP>:8765`.
+
+---
+
+## Windows Native (không WSL)
+
+> Chạy agent **trực tiếp trên Windows** — không cần WSL, không cài Python vào hệ thống. Chỉ cần giải nén và double-click `windows\run.bat`.
+
+### Phương án A — Portable (khuyến nghị)
+
+**Lần đầu chạy:**
+
+1. Tải source code (clone hoặc giải nén ZIP) vào một thư mục bất kỳ, ví dụ: `D:\copilot-agent\`
+2. Copy file `windows\config.windows.json` thành `config.json` (thư mục gốc) và chỉnh sửa các đường dẫn
+3. Double-click **`windows\run.bat`**
+
+`run.bat` sẽ tự động:
+- Tải `uv.exe` portable (~10MB) vào thư mục `.uv\` nếu chưa có
+- Cài Python đúng phiên bản + dependencies vào `.venv\`
+- Khởi động agent
+
+**Các lần sau:** Double-click `windows\run.bat` là xong.
+
+> **Portable hoàn toàn:** Xóa thư mục là sạch. Không đụng gì vào Windows Registry hay System PATH.
+
+### Setup một lần (không dùng run.bat)
+
+Nếu muốn chạy từ PowerShell thủ công:
+
+```powershell
+# Trong PowerShell (không cần Admin)
+powershell -ExecutionPolicy Bypass -File windows\setup.ps1
+
+# Chạy agent
+.uv\uv.exe run python main.py
+```
+
+### Cấu hình `config.json` cho Windows native
+
+Sử dụng `windows\config.windows.json` làm mẫu — khác biệt chính so với Linux:
+
+| Trường | Linux/WSL | Windows Native |
+|---|---|---|
+| `repo_path` | `/home/user/project` | `C:/Users/user/project` |
+| `sync_path` | `/mnt/c/Users/...` | `C:/Users/.../OneDrive.../copilot-sync` |
+| `download_path` | `~/Downloads/CopilotAgent` | `C:/Users/user/Downloads/CopilotAgent` |
+| `verify_command` | `python3 -m unittest discover` | `python -m unittest discover` |
+
+> **Lưu ý:** Dùng `/` hoặc `\\` trong path JSON đều được. Không dùng `\` đơn vì sẽ bị escape.
+
+### Phương án B — Đóng gói `.exe` (phân phối cho tập thể)
+
+Nếu muốn phân phối cho team mà không cần ai cài đặt gì cả:
+
+```bash
+# Chạy trong WSL hoặc trên máy dev
+uv add --dev pyinstaller
+
+# Build file .exe duy nhất
+uv run pyinstaller \
+  --onefile \
+  --name "copilot-agent" \
+  --add-data "skills:skills" \
+  --add-data "extension:extension" \
+  main.py
+```
+
+Hoặc trên Windows PowerShell:
+
+```powershell
+.uv\uv.exe add --dev pyinstaller
+
+.uv\uv.exe run pyinstaller `
+  --onefile `
+  --name "copilot-agent" `
+  --add-data "skills;skills" `
+  --add-data "extension;extension" `
+  main.py
+```
+
+> Sau khi build, file `dist\copilot-agent.exe` (~50MB) có thể chạy độc lập. Người dùng chỉ cần có file `.exe` + `config.json`.
+
+> [!NOTE]
+> **Giới hạn của `.exe`:** Một số antivirus doanh nghiệp sẽ cảnh báo file `.exe` không có chữ ký số. Trong trường hợp này, phương án A (portable) an toàn hơn.
+
+### Troubleshooting Windows Native
+
+| Vấn đề | Giải pháp |
+|---|---|
+| `run.bat` đóng ngay | Click chuột phải **`windows\run.bat`** → **Run as Administrator** (chỉ lần đầu nếu firewall chặn) |
+| Lỗi `SSL` khi tải uv | Mạng doanh nghiệp chặn GitHub. Hỏi IT whitelist `github.com` hoặc tải `uv.exe` thủ công → đặt vào `.uv\` (thư mục gốc) |
 
 ---
 

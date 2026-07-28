@@ -1,0 +1,33 @@
+{
+  "_comment": "Config mẫu cho Windows thuần (không WSL). Thay các giá trị placeholder.",
+
+  "repo_path": "C:/Users/YOUR_USERNAME/projects/my-project",
+
+  "sync_path": "C:/Users/YOUR_USERNAME/OneDrive - FPT Software/copilot-sync",
+
+  "download_path": "C:/Users/YOUR_USERNAME/Downloads/CopilotAgent",
+
+  "onedrive_link": "https://YOUR_TENANT-my.sharepoint.com/:u:/r/personal/YOUR_EMAIL/Documents/copilot-sync/{zip_filename}",
+
+  "copilot_base_url": "https://m365.cloud.microsoft/chat",
+
+  "websocket_port": 8765,
+
+  "default_model": "auto",
+
+  "verify_command": "python -m unittest discover",
+
+  "max_retry_on_failure": 1,
+
+  "zip_exclude_dirs": [".git", "__pycache__", "node_modules", ".venv"],
+
+  "active_skill": "default",
+  "skills_dir": "./skills",
+  "session_state_file": "./.copilot-agent-state.json",
+
+  "sync_command": "",
+  "sync_delay": 15,
+
+  "onedrive_link_delay_ms": 3000,
+  "reconnect_timeout_s": 60
+}

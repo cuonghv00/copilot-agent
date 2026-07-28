@@ -130,16 +130,33 @@ async function inputPrompt(fullPrompt) {
     document.execCommand('delete', false, null);
     await sleep(200);
 
-    // Insert text preserving newlines.
-    // execCommand('insertText') strips \n in most contenteditable editors,
-    // so we split by line and use insertParagraph between each line.
-    const lines = fullPrompt.split('\n');
-    for (let i = 0; i < lines.length; i++) {
-        if (lines[i].length > 0) {
-            document.execCommand('insertText', false, lines[i]);
-        }
-        if (i < lines.length - 1) {
-            document.execCommand('insertParagraph', false, null);
+    // Insert text using ClipboardEvent paste — most reliable way to preserve newlines
+    // in ProseMirror/rich-text editors. execCommand('insertParagraph') creates paragraph
+    // nodes that may collapse to a single line when serialized by the editor.
+    let pasted = false;
+    try {
+        const dt = new DataTransfer();
+        dt.setData('text/plain', fullPrompt);
+        editor.dispatchEvent(new ClipboardEvent('paste', {
+            clipboardData: dt,
+            bubbles: true,
+            cancelable: true,
+        }));
+        pasted = true;
+    } catch (_e) {
+        pasted = false;
+    }
+
+    if (!pasted) {
+        // Fallback: split lines and use insertParagraph
+        const lines = fullPrompt.split('\n');
+        for (let i = 0; i < lines.length; i++) {
+            if (lines[i].length > 0) {
+                document.execCommand('insertText', false, lines[i]);
+            }
+            if (i < lines.length - 1) {
+                document.execCommand('insertParagraph', false, null);
+            }
         }
     }
 
@@ -336,7 +353,7 @@ function findDownloadLink() {
 // --- Main Task Executor ---
 
 async function executeTask(taskData) {
-    const { model, prompt, is_new_session } = taskData;
+    const { model, prompt, is_new_session, onedrive_link_delay_ms = 0 } = taskData;
 
     if (is_new_session) {
         await clickNewChat();
@@ -348,6 +365,14 @@ async function executeTask(taskData) {
     
     const inputOk = await inputPrompt(prompt);
     if (!inputOk) return;
+
+    // Bug fix: wait for OneDrive to recognise the pasted file link before sending.
+    // When a SharePoint/OneDrive link is included, the platform needs ~1-3s to
+    // resolve it into a file attachment — same as the manual "paste then wait" flow.
+    if (onedrive_link_delay_ms > 0) {
+        sendStatus('ONEDRIVE_WAIT', `Waiting ${onedrive_link_delay_ms}ms for OneDrive file recognition…`);
+        await sleep(onedrive_link_delay_ms);
+    }
 
     const sendOk = await clickSend();
     if (!sendOk) return;

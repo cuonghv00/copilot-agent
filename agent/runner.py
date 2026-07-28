@@ -26,11 +26,13 @@ class TaskRunner:
         self.live_display = None
         self._task_lock = asyncio.Lock()  # LOG-1: serialize tasks — task 2 chờ task 1 xong
         self.connected_event = asyncio.Event()  # bắt khi extension kết nối lần đầu
+        self._reconnect_event = asyncio.Event()  # bắt khi extension reconnect
 
     async def handle_connection(self, websocket):
         self.ws = websocket
         self.connected = True
-        self.connected_event.set()  # thông báo cho cli biết extension đã kết nối
+        self.connected_event.set()   # thông báo cho cli biết extension đã kết nối lần đầu
+        self._reconnect_event.set()  # mọi lần kết nối (cả reconnect) đều signal
         print_sys("✓ Chrome Extension connected", "green")
         try:
             get_app().invalidate()
@@ -44,11 +46,39 @@ class TaskRunner:
         finally:
             self.connected = False
             self.ws = None
-            print_sys("Extension disconnected", "yellow")
+            self._reconnect_event.clear()  # reset để lần reconnect tiếp theo sẽ set lại
+            # Nếu đang có task chờ kết quả, không error ngay mà spawn cửụ chờ reconnect.
+            # Extension có thể reconnect lại trong vài giây (mạng chập chờợn) và gửi
+            # kết quả bình thường — không cần phải hủy task.
+            if self._pending and not self._pending.done():
+                asyncio.ensure_future(self._wait_reconnect_or_error())
+            print_sys("⚠ Extension disconnected — chờ reconnect…", "yellow")
             try:
                 get_app().invalidate()
             except Exception:
                 pass
+
+    async def _wait_reconnect_or_error(self):
+        """Chờ extension reconnect trong reconnect_timeout_s giây.
+        Nếu reconnect kịp → task tiếp tục bình thường.
+        Nếu hết timeout → resolve _pending với lỗi và gợi ý /resume.
+        """
+        timeout = self.config.get("reconnect_timeout_s", 60)
+        print_sys(f"⏳ Chờ extension reconnect trong {timeout}s …", "yellow")
+        try:
+            await asyncio.wait_for(self._reconnect_event.wait(), timeout=timeout)
+            # Extension đã reconnect — không cần làm gì, _pending sẽ được resolve bình thường
+            print_sys("✓ Extension reconnected — tiếp tục task", "green")
+        except asyncio.TimeoutError:
+            if self._pending and not self._pending.done():
+                sid = self.state.last_session_id
+                hint = f" — dùng [bold]/resume {sid}[/bold] để tiếp tục" if sid else ""
+                print_sys(
+                    f"❌ Không thể kết nối lại sau {timeout}s."
+                    f" Kết quả vẫn có trên Copilot browser{hint}.",
+                    "red",
+                )
+                self._pending.set_result({"type": "error", "message": "Extension disconnected (timeout)"})
 
     async def _on_message(self, data: dict):
         event = data.get("event", "")
@@ -147,6 +177,12 @@ class TaskRunner:
                 "prompt": full_prompt,
                 "is_new_session": is_new_session,
                 "last_session_id": self.state.last_session_id,
+                # Delay (ms) cho extension đợi OneDrive nhận diện file trước khi Send.
+                "onedrive_link_delay_ms": (
+                    self.config.get("onedrive_link_delay_ms", 3000)
+                    if include_onedrive_link and dynamic_link
+                    else 0
+                ),
             }
 
             self.task_running = True

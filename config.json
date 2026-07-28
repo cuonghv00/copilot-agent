@@ -18,5 +18,7 @@
   "skills_dir": "./skills",
   "session_state_file": "./.copilot-agent-state.json",
   "sync_command": "",
-  "sync_delay": 10
+  "sync_delay": 10,
+  "onedrive_link_delay_ms": 3000,
+  "reconnect_timeout_s": 60
 }
