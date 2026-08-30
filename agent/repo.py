@@ -40,6 +40,7 @@ def zip_repo(
             sync_command
             .replace("{sync_dir}", str(output_zip.parent))
             .replace("{zip_path}", str(output_zip))
+            .replace("{zip_filename}", output_zip.name)
         )
         subprocess.run(cmd, shell=True, check=False)
 

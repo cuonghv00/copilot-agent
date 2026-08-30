@@ -222,7 +222,28 @@ Chỉnh sửa file `config.json` ở thư mục gốc:
 | `default_model` | Model Copilot mặc định (`auto`, `think`, `quick`, `gpt`, `sonnet`, …) |
 | `verify_command` | Lệnh verify sau khi apply code (`pytest`, `python3 -m unittest discover`) |
 | `max_retry_on_failure` | Số lần tự động retry khi verify thất bại |
+| `sync_command` | Lệnh tự động đẩy file ZIP lên cloud (ví dụ: `rclone copy {zip_path} remote:copilot-sync`) |
+| `sync_delay` | Thời gian chờ (giây) sau khi sync để OneDrive cập nhật link trước khi gửi prompt |
 | `onedrive_link_delay_ms` | Thời gian chờ Copilot nhận diện attachment OneDrive link trước khi ấn Send |
+
+### Sử dụng `rclone` đẩy file ZIP trực tiếp lên OneDrive
+
+Nếu bạn dùng `rclone` (trên Linux/WSL/Windows) để đồng bộ trực tiếp file ZIP lên OneDrive:
+
+1. Cấu hình `rclone` trỏ tới OneDrive account của bạn (ví dụ remote tên `onedrive`).
+2. Cấu hình `sync_command` trong `config.json`:
+
+```json
+{
+  "sync_command": "rclone copy {zip_path} onedrive:copilot-sync",
+  "sync_delay": 2
+}
+```
+
+> **Placeholders khả dụng trong `sync_command`:**
+> - `{zip_path}`: Đường dẫn đầy đủ đến file ZIP (ví dụ: `/path/to/sync/my_repo.zip`)
+> - `{sync_dir}`: Đường dẫn thư mục sync
+> - `{zip_filename}`: Tên file ZIP (ví dụ: `my_repo.zip`)
 
 ---
 
