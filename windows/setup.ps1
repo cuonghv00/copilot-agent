@@ -105,7 +105,7 @@ if (-not (Test-Path $UvExe)) {
 }
 
 # ── 2. Cài Python + dependencies qua uv ────────────────────────────────────
-Write-Host "[2/3] Installing Python & dependencies (may take a minute)..." -ForegroundColor Yellow
+Write-Host "[2/4] Installing Python & dependencies (may take a minute)..." -ForegroundColor Yellow
 Set-UvProxyEnv
 & $UvExe sync --project $ProjectDir
 if ($LASTEXITCODE -ne 0) {
@@ -116,8 +116,36 @@ if ($LASTEXITCODE -ne 0) {
 }
 Write-Host "    ✓ Dependencies installed." -ForegroundColor Green
 
+# ── 3. Cài Playwright browser (Chromium) ─────────────────────────────────────────────
+Write-Host "[3/4] Installing Playwright Chromium (skip if using system Chrome/Edge)..." -ForegroundColor Yellow
+
+# Chỉ cài Playwright Chromium nếu config không chỉ tới executable có sẵn
+$ConfigJson = Join-Path $ProjectDir "config.json"
+$SkipPlaywrightBrowser = $false
+if (Test-Path $ConfigJson) {
+    try {
+        $cfg = Get-Content $ConfigJson -Raw | ConvertFrom-Json
+        if ($cfg.browser_executable_path -ne $null -and $cfg.browser_executable_path -ne "") {
+            $SkipPlaywrightBrowser = $true
+            Write-Host "    ✓ browser_executable_path set in config.json — skipping Playwright Chromium download." -ForegroundColor Green
+        }
+    } catch {}
+}
+
+if (-not $SkipPlaywrightBrowser) {
+    try {
+        & $UvExe run --project $ProjectDir playwright install chromium
+        if ($LASTEXITCODE -ne 0) { throw "playwright install failed" }
+        Write-Host "    ✓ Playwright Chromium installed." -ForegroundColor Green
+    } catch {
+        Write-Host "    ⚠ Playwright Chromium install thất bại (mạng chặn?)." -ForegroundColor Yellow
+        Write-Host "      → Điền browser_executable_path trong config.json để dùng Chrome/Edge có sẵn." -ForegroundColor Yellow
+        Write-Host "      Ví dụ: \"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe\"" -ForegroundColor DarkGray
+    }
+}
+
 # ── 3. Tạo config.json nếu chưa có ─────────────────────────────────────────
-Write-Host "[3/3] Checking config.json..." -ForegroundColor Yellow
+Write-Host "[4/4] Checking config.json..." -ForegroundColor Yellow
 $ConfigPath    = Join-Path $ProjectDir "config.json"
 $ConfigExample = Join-Path $WinDir "config.windows.json"
 

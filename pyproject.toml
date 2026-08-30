@@ -1,13 +1,16 @@
 [project]
 name = "copilot-agent"
-version = "0.1.0"
+version = "0.2.0"
 description = "M365 Copilot automation agent"
 requires-python = ">=3.11"
 dependencies = [
-    "websockets>=13",
+    "playwright>=1.45",
     "rich>=13",
     "prompt-toolkit>=3",
 ]
 
 [dependency-groups]
-dev = []
+dev = [
+    "pyinstaller>=6",
+    "pytest>=8",
+]

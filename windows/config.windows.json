@@ -11,7 +11,11 @@
 
   "copilot_base_url": "https://m365.cloud.microsoft/chat",
 
-  "websocket_port": 8765,
+  "_comment_browser": "Playwright browser settings",
+  "browser_profile_dir": "C:/Users/YOUR_USERNAME/.copilot-agent-profile",
+  "browser_headless": false,
+  "browser_executable_path": "C:/Program Files/Google/Chrome/Application/chrome.exe",
+  "browser_timeout_ms": 30000,
 
   "default_model": "auto",
 
@@ -28,6 +32,5 @@
   "sync_command": "",
   "sync_delay": 15,
 
-  "onedrive_link_delay_ms": 3000,
-  "reconnect_timeout_s": 60
+  "onedrive_link_delay_ms": 3000
 }

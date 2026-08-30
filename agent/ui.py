@@ -105,16 +105,16 @@ def print_help():
         border_style="blue",
     ))
 
-def make_toolbar(state_sid: str, runner_connected: bool, model: str, output_on: bool):
+def make_toolbar(state_sid: str, browser_ready: bool, model: str, output_on: bool):
     def _toolbar():
         term_width = shutil.get_terminal_size().columns
         top_line = "─" * (term_width - 2)
         bottom_line = "─" * (term_width - 2)
 
-        ws_dot = '<style fg="ansigreen">●</style>' if runner_connected else '<style fg="ansired">●</style>'
+        ws_dot = '<style fg="ansigreen">●</style>' if browser_ready else '<style fg="ansired">●</style>'
         out_flag = ' <style fg="ansiyellow">[OUT]</style>' if output_on else ''
         out_plain = ' [OUT]' if output_on else ''
-        
+
         left_text = f'{ws_dot} <style fg="ansiyellow">[{model}]</style> /new   /model   /help   /exit'
         left_plain = f'● [{model}] /new   /model   /help   /exit'
         

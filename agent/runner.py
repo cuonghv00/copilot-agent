@@ -1,13 +1,20 @@
+"""
+agent/runner.py — TaskRunner
+
+Orchestrate task execution: zip repo → upload → send to Copilot via Playwright.
+Không còn phụ thuộc WebSocket hay Chrome Extension.
+"""
+
 import asyncio
-import json
 from pathlib import Path
-import websockets
-from prompt_toolkit.application import get_app
+
 from rich.live import Live
 
+from agent.browser import BrowserController
 from agent.config import AgentState
 from agent.prompt import load_skill_content, build_full_prompt
 from agent.ui import console, print_sys, print_copilot_summary, get_agent_panel
+
 
 class TaskRunner:
     def __init__(self, config: dict, state: AgentState):
@@ -17,130 +24,40 @@ class TaskRunner:
         self.sync_path = Path(config["sync_path"]).expanduser().resolve()
         self.download_path = Path(config["download_path"]).expanduser().resolve()
         self.skills_dir = Path(config.get("skills_dir", "./skills")).expanduser().resolve()
-        self.ws: websockets.ServerConnection | None = None
-        self.connected = False
-        self.task_running = False
-        self._pending: asyncio.Future | None = None
+
         self._current_model = config["default_model"]
-        self.status_history = []
-        self.live_display = None
-        self._task_lock = asyncio.Lock()  # LOG-1: serialize tasks — task 2 chờ task 1 xong
-        self.connected_event = asyncio.Event()  # bắt khi extension kết nối lần đầu
-        self._reconnect_event = asyncio.Event()  # bắt khi extension reconnect
+        self.status_history: list[str] = []
+        self.live_display: Live | None = None
+        self._task_lock = asyncio.Lock()  # serialize tasks
 
-    async def handle_connection(self, websocket):
-        self.ws = websocket
-        self.connected = True
-        self.connected_event.set()   # thông báo cho cli biết extension đã kết nối lần đầu
-        self._reconnect_event.set()  # mọi lần kết nối (cả reconnect) đều signal
-        print_sys("✓ Chrome Extension connected", "green")
-        try:
-            get_app().invalidate()
-        except Exception:
-            pass
-        try:
-            async for raw in websocket:
-                await self._on_message(json.loads(raw))
-        except websockets.exceptions.ConnectionClosed:
-            pass
-        finally:
-            self.connected = False
-            self.ws = None
-            self._reconnect_event.clear()  # reset để lần reconnect tiếp theo sẽ set lại
-            # Nếu đang có task chờ kết quả, không error ngay mà spawn cửụ chờ reconnect.
-            # Extension có thể reconnect lại trong vài giây (mạng chập chờợn) và gửi
-            # kết quả bình thường — không cần phải hủy task.
-            if self._pending and not self._pending.done():
-                asyncio.ensure_future(self._wait_reconnect_or_error())
-            print_sys("⚠ Extension disconnected — chờ reconnect…", "yellow")
-            try:
-                get_app().invalidate()
-            except Exception:
-                pass
+        # Playwright browser controller
+        self.browser = BrowserController(config)
+        self.browser.set_status_callback(self._handle_status)
 
-    async def _wait_reconnect_or_error(self):
-        """Chờ extension reconnect trong reconnect_timeout_s giây.
-        Nếu reconnect kịp → task tiếp tục bình thường.
-        Nếu hết timeout → resolve _pending với lỗi và gợi ý /resume.
-        """
-        timeout = self.config.get("reconnect_timeout_s", 60)
-        print_sys(f"⏳ Chờ extension reconnect trong {timeout}s …", "yellow")
-        try:
-            await asyncio.wait_for(self._reconnect_event.wait(), timeout=timeout)
-            # Extension đã reconnect — không cần làm gì, _pending sẽ được resolve bình thường
-            print_sys("✓ Extension reconnected — tiếp tục task", "green")
-        except asyncio.TimeoutError:
-            if self._pending and not self._pending.done():
-                sid = self.state.last_session_id
-                hint = f" — dùng [bold]/resume {sid}[/bold] để tiếp tục" if sid else ""
-                print_sys(
-                    f"❌ Không thể kết nối lại sau {timeout}s."
-                    f" Kết quả vẫn có trên Copilot browser{hint}.",
-                    "red",
-                )
-                self._pending.set_result({"type": "error", "message": "Extension disconnected (timeout)"})
+    # ── Status callback từ BrowserController ────────────────────────────────
 
-    async def _on_message(self, data: dict):
-        event = data.get("event", "")
+    async def _handle_status(self, status: str, msg: str) -> None:
+        """Cập nhật live display khi browser gửi status update."""
+        _noisy = {"NEW_CHAT_CLICKED", "PROMPT_FINDING", "PROMPT_ENTERED", "SENDING"}
+        if status not in _noisy:
+            self.status_history.append(f"↳ {msg or status}")
+            if len(self.status_history) > 3:
+                self.status_history.pop(0)
+            if self.live_display:
+                self.live_display.update(get_agent_panel("\n".join(self.status_history)))
 
-        if event == "SESSION_ID":
-            sid = data.get("id", "")
-            if sid:
-                self.state.last_session_id = sid
-                self.state.model = self._current_model
-                self.state.save()
-                print_sys(f"📌 Session ID: {sid}", "dim cyan")
-                try:
-                    get_app().invalidate()
-                except Exception:
-                    pass
-
-        elif event == "STATUS_UPDATE":
-            status = data.get("status", "")
-            _noisy = {"NEW_CHAT_CLICKED", "PROMPT_FINDING", "PROMPT_ENTERED", "SENDING"}
-            if status not in _noisy:
-                self.status_history.append(f"↳ {data.get('message', status)}")
-                if len(self.status_history) > 3:
-                    self.status_history.pop(0)
-                
-                if getattr(self, 'live_display', None):
-                    self.live_display.update(get_agent_panel("\n".join(self.status_history)))
-
-        elif event == "RESPONSE_TEXT":
-            text = data.get("text", "")
-            if text:
-                print_copilot_summary(text)
-
-        elif event == "TASK_COMPLETE":
-            status = data.get("status", "")
-            if status == "FILE_DOWNLOADED":
-                filepath = data.get("filepath", "")
-                filename = data.get("filename", "output.zip")
-                zip_file = (
-                    Path(filepath)
-                    if filepath and Path(filepath).exists()
-                    else self.download_path / filename
-                )
-                if self._pending and not self._pending.done():
-                    self._pending.set_result({"type": "file", "path": zip_file})
-            elif status == "NO_FILE":
-                if self._pending and not self._pending.done():
-                    self._pending.set_result({"type": "text"})
-
-        elif event == "ERROR":
-            msg = data.get("message", "Unknown error")
-            step = data.get("step", "?")
-            console.print(f"[red]❌ [{step}] {msg}[/red]")
-            if self._pending and not self._pending.done():
-                self._pending.set_result({"type": "error", "message": f"[{step}] {msg}"})
+    # ── Main task sender ─────────────────────────────────────────────────────
 
     async def send_task(
-        self, user_prompt: str, is_new_session: bool, model: str,
+        self,
+        user_prompt: str,
+        is_new_session: bool,
+        model: str,
         request_output: bool = False,
         include_onedrive_link: bool = True,
     ) -> dict | None:
-        if not self.connected or not self.ws:
-            print_sys("❌ Extension chưa kết nối. Hãy mở browser và đảm bảo extension đang chạy.", "red")
+        if not self.browser.ready:
+            print_sys("❌ Browser chưa sẵn sàng. Thử khởi động lại agent.", "red")
             return None
 
         if self._task_lock.locked():
@@ -156,7 +73,7 @@ class TaskRunner:
 
             repo_name = self.repo_path.name
             zip_filename = f"{repo_name}.zip"
-            # Chỉ build link khi include_onedrive_link=True (user đã zip repo)
+
             dynamic_link = ""
             if include_onedrive_link:
                 dynamic_link = (
@@ -170,49 +87,49 @@ class TaskRunner:
                 request_output, is_new_session
             )
 
-            payload = {
-                "action": "START_TASK",
-                "onedrive_link": dynamic_link,
-                "model": model,
-                "prompt": full_prompt,
-                "is_new_session": is_new_session,
-                "last_session_id": self.state.last_session_id,
-                # Delay (ms) cho extension đợi OneDrive nhận diện file trước khi Send.
-                "onedrive_link_delay_ms": (
-                    self.config.get("onedrive_link_delay_ms", 3000)
-                    if include_onedrive_link and dynamic_link
-                    else 0
-                ),
-            }
+            onedrive_delay_ms = (
+                self.config.get("onedrive_link_delay_ms", 3_000)
+                if include_onedrive_link and dynamic_link
+                else 0
+            )
 
-            self.task_running = True
             self.status_history = ["↳ Starting task…"]
-            loop = asyncio.get_running_loop()
-            self._pending = loop.create_future()
 
             try:
-                with Live(get_agent_panel(self.status_history[0]), refresh_per_second=4, console=console) as live:
+                with Live(
+                    get_agent_panel(self.status_history[0]),
+                    refresh_per_second=4,
+                    console=console,
+                ) as live:
                     self.live_display = live
-                    try:
-                        await self.ws.send(json.dumps(payload))
-                    except websockets.exceptions.ConnectionClosed:
-                        self.task_running = False
-                        self._pending = None
-                        self.live_display = None
-                        return None
 
-                    try:
-                        result = await asyncio.wait_for(asyncio.shield(self._pending), timeout=600)
-                    except asyncio.TimeoutError:
-                        result = {"type": "error", "message": "Timeout (10 min) waiting for response"}
+                    result = await self.browser.execute_task(
+                        prompt=full_prompt,
+                        model=model,
+                        is_new_session=is_new_session,
+                        last_session_id=self.state.last_session_id or "",
+                        onedrive_link_delay_ms=onedrive_delay_ms,
+                    )
+
+                    # Lưu session ID nếu nhận được
+                    sid = result.get("session_id")
+                    if sid and sid != self.state.last_session_id:
+                        self.state.last_session_id = sid
+                        self.state.model = model
+                        self.state.save()
+                        print_sys(f"📌 Session ID: {sid}", "dim cyan")
+
+                    # Hiển thị response text
+                    response_text = result.get("response", "")
+                    if response_text:
+                        print_copilot_summary(response_text)
 
                     self.status_history.append("↳ Done ✓")
                     if len(self.status_history) > 3:
                         self.status_history.pop(0)
                     live.update(get_agent_panel("\n".join(self.status_history)))
+
             finally:
-                self.task_running = False
-                self._pending = None
                 self.live_display = None
 
             return result

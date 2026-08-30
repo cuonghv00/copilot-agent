@@ -4,7 +4,12 @@
   "download_path": "~/Downloads/CopilotAgent",
   "onedrive_link": "https://example.com/{zip_filename}",
   "copilot_base_url": "https://m365.cloud.microsoft/chat",
-  "websocket_port": 8765,
+
+  "browser_profile_dir": "~/.copilot-agent-profile",
+  "browser_headless": false,
+  "browser_executable_path": "",
+  "browser_timeout_ms": 30000,
+
   "default_model": "auto",
   "verify_command": "python3 -m unittest discover",
   "max_retry_on_failure": 1,
@@ -19,6 +24,5 @@
   "session_state_file": "./.copilot-agent-state.json",
   "sync_command": "",
   "sync_delay": 10,
-  "onedrive_link_delay_ms": 3000,
-  "reconnect_timeout_s": 60
+  "onedrive_link_delay_ms": 3000
 }
