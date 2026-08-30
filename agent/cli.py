@@ -287,6 +287,9 @@ async def main_loop():
                 continue
 
             try:
+                # 1. Safety net: Add current state to git index
+                await asyncio.to_thread(subprocess.run, ["git", "add", "-A"], cwd=runner.repo_path, check=False)
+                
                 applied = await asyncio.to_thread(apply_downloaded_zip, zip_file, runner.repo_path)
             except zipfile.BadZipFile as e:
                 print_sys(f"❌ Bad zip file: {e}", "red")
@@ -300,7 +303,16 @@ async def main_loop():
             print_sys(f"✓ Applied {len(applied)} file(s):", "green")
             print_applied(applied)
 
+            # 2. Show diff of what Copilot changed
+            diff_proc = await asyncio.to_thread(
+                subprocess.run, ["git", "diff", "--color=always"], 
+                cwd=runner.repo_path, capture_output=True, text=True
+            )
+            if diff_proc.stdout.strip():
+                print("\n" + diff_proc.stdout)
+
             retry_left = max_retry
+            success = False
             while True:
                 print_sys(f"Running verify: {config['verify_command']}", "dim")
                 success, output = await asyncio.to_thread(
@@ -324,10 +336,26 @@ async def main_loop():
                 zip2: Path = r2["path"]
                 if not zip2.exists():
                     break
+                
                 applied2 = await asyncio.to_thread(apply_downloaded_zip, zip2, runner.repo_path)
                 if applied2:
                     print_sys(f"✓ Retry applied {len(applied2)} file(s)", "green")
                     print_applied(applied2)
+                    diff_proc2 = await asyncio.to_thread(
+                        subprocess.run, ["git", "diff", "--color=always"], 
+                        cwd=runner.repo_path, capture_output=True, text=True
+                    )
+                    if diff_proc2.stdout.strip():
+                        print("\n" + diff_proc2.stdout)
+
+            # 3. Auto commit if success
+            if success:
+                # Kiểm tra xem có thực sự có thay đổi nào trong working tree hoặc index không
+                stat = await asyncio.to_thread(subprocess.run, ["git", "status", "--porcelain"], cwd=runner.repo_path, capture_output=True, text=True)
+                if stat.stdout.strip():
+                    await asyncio.to_thread(subprocess.run, ["git", "add", "-A"], cwd=runner.repo_path, check=False)
+                    await asyncio.to_thread(subprocess.run, ["git", "commit", "-m", "Auto-commit: Copilot applied changes"], cwd=runner.repo_path, check=False)
+                    print_sys("✓ Auto-committed applied changes to git.", "green")
 
     finally:
         # Đóng browser khi thoát
